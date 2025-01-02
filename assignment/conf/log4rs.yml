@@ -1,0 +1,27 @@
+appenders:
+  stdout:
+    kind: console
+    encoder:
+      pattern: "{d(%+)(utc)} [{f}:{L}] {h({l})} {M}:{m}{n}"
+    filters:
+      - kind: threshold
+        level: info
+  rollingfile:
+    kind: rolling_file
+    path: "log/index_collector.log"
+    encoder:
+      pattern: "[{d(%Y-%m-%dT%H:%M:%S%.6f)} {h({l}):<5.5} {M}] {m}{n}"
+    policy:
+      trigger:
+        kind: time
+        interval: 1 hour
+      roller:
+        kind: fixed_window
+        pattern: "log/old-index_collector-{}.log"
+        base: 0
+        count: 2
+root:
+  level: debug
+  appenders:
+    - stdout
+    - rollingfile
