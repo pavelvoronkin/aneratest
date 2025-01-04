@@ -1,10 +1,7 @@
-
-pub struct WebAppState {
-
-}
+pub struct WebAppState {}
 
 impl WebAppState {
     pub fn new() -> Self {
-        Self {  }
+        Self {}
     }
 }

@@ -1,7 +1,7 @@
-use actix_web::{get, web, HttpRequest};
 use actix_web::error::QueryPayloadError;
 use actix_web::web::Query;
-use log::{error, info};
+use actix_web::{get, web, HttpRequest};
+use log::{error, info, trace};
 use serde::Deserialize;
 
 pub fn init(cfg: &mut web::ServiceConfig) {
@@ -24,7 +24,10 @@ struct CallbackParameters {
 async fn demo_callback(req: HttpRequest) -> &'static str {
     match Query::<CallbackParameters>::from_query(req.query_string()) {
         Ok(params) => {
-            info!("For the sake of demo price={}, asset={}", params.price, params.asset);
+            info!(
+                "For the sake of demo price={}, asset={}",
+                params.price, params.asset
+            );
         }
         Err(e) => {
             error!("Error parsing callback parameters {}", e);

@@ -1,35 +1,37 @@
 extern crate core;
 
-use std::alloc::System;
 use actix_web::{web, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use assignment::app_config::app_config;
-use assignment::app_config::app_config::PriceFeedConfig;
+use assignment::app_config::app_config::{
+    start_config_poller_task, IndexCollectorAppConfig, PriceFeedConfig,
+};
 use assignment::app_config::control::{start_signal_handler, Control};
+use assignment::downstream::downstream_sender;
+use assignment::downstream::downstream_sender::DownstreamMessage;
 use assignment::index_collector::index_collector::{IndexCollector, SmoothingAlgorithm, Source};
 use assignment::index_collector::processor;
 use assignment::index_collector::processor::ProcessorMessage;
 use assignment::index_collector::smoothing::{EMASmoothing, SMASmoothing};
 use assignment::infra::clock;
+use assignment::persistence;
+use assignment::persistence::persistence_sender;
 use assignment::upstream::price_feed;
 use assignment::upstream::price_feed::PriceFeed;
 use assignment::web::controller;
 use assignment::web::state::WebAppState;
 use crossbeam_channel::{unbounded, Sender};
 use log::{debug, error, info, trace, warn};
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::iterator::Signals;
+use signal_hook::low_level::exit;
+use std::alloc::System;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use signal_hook::consts::{SIGINT, SIGTERM};
-use signal_hook::iterator::Signals;
-use signal_hook::low_level::exit;
 use structopt::StructOpt;
 use tokio::task::JoinHandle;
-use assignment::downstream::downstream_sender;
-use assignment::downstream::downstream_sender::DownstreamMessage;
-use assignment::persistence;
-use assignment::persistence::persistence_sender;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
@@ -48,29 +50,53 @@ async fn main() {
     let args: Command = Command::from_args();
     info!("args: {:?}", args);
 
-    let config = app_config::get_app_config(args.config);
-    debug!("app_config: {:?}", config);
+    match app_config::get_app_config(args.config.clone()) {
+        Ok(config) => {
+            info!("app_config: {:?}", config);
 
-    let (proc_snd, proc_rcv) = unbounded::<ProcessorMessage>();
-    let (persister_snd, perister_rcv) = unbounded::<ProcessorMessage>();
-    let (d_snd, d_rcv) = unbounded::<DownstreamMessage>();
+            let (proc_snd, proc_rcv) = unbounded::<ProcessorMessage>();
+            let (persister_snd, persister_rcv) = unbounded::<ProcessorMessage>();
+            let (downstream_snd, downstream_rcv) = unbounded::<DownstreamMessage>();
 
-    let control = Arc::new(Control::new(proc_snd.clone(), persister_snd.clone(), d_snd.clone()));
+            let control = Arc::new(Control::new(
+                proc_snd.clone(),
+                persister_snd.clone(),
+                downstream_snd.clone(),
+            ));
 
-    start_signal_handler(control.clone());
+            start_signal_handler(control.clone());
 
+            start_config_poller_task(
+                control.clone(),
+                config.clone(),
+                proc_snd.clone(),
+                persister_snd.clone(),
+                downstream_snd.clone(),
+                args.config,
+            );
 
-    for (_, price_feed_configs) in config.price_feeds.clone() {
-        for price_feed_cfg in price_feed_configs {
-            price_feed::spawn_fetch_task(&price_feed_cfg, control.clone(), proc_snd.clone(), persister_snd.clone());
+            for (_, price_feed_configs) in config.price_feeds.clone() {
+                for price_feed_cfg in price_feed_configs {
+                    price_feed::spawn_fetch_task(
+                        &price_feed_cfg,
+                        control.clone(),
+                        proc_snd.clone(),
+                        persister_snd.clone(),
+                    );
+                }
+            }
+
+            processor::start(proc_rcv, downstream_snd, config.price_feeds);
+            downstream_sender::start(downstream_rcv, config.downstream);
+            persistence_sender::start(persister_rcv);
+
+            start_http_server().await;
+        }
+        Err(e) => {
+            error!("Error loading app_config: {:?}", e);
+            exit(1);
         }
     }
-
-    processor::start(proc_rcv, d_snd, config.price_feeds);
-    downstream_sender::start(d_rcv, config.downstream);
-    persistence_sender::start(perister_rcv);
-
-    start_http_server().await;
 }
 
 async fn start_http_server() {

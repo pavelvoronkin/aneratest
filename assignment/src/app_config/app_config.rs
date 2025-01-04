@@ -1,14 +1,75 @@
+use crate::app_config::app_config;
+use crate::app_config::control::Control;
+use crate::downstream::downstream_sender::DownstreamMessage;
 use crate::index_collector::index_collector::{Asset, FeedId, SmoothingAlgorithm, Source};
+use crate::index_collector::processor::ProcessorMessage;
 use crate::upstream::price_feed::FeedErr;
-use log::{error, info};
+use crossbeam_channel::Sender;
+use log::{debug, error, info};
 use serde::Deserialize;
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::iterator::Signals;
+use signal_hook::low_level::exit;
 use std::collections::{HashMap, HashSet};
-use std::{env, fs};
+use std::sync::Arc;
+use std::time::Duration;
+use std::{env, fs, thread};
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
 pub const LOCAL: &'static str = "local";
 pub const QA: &'static str = "qa";
 const TESTNET: &'static str = "testnet";
 const PROD: &'static str = "prod";
+
+pub fn start_config_poller_task(
+    ctrl: Arc<Control>,
+    initial_config: IndexCollectorAppConfig,
+    prc_snd: Sender<ProcessorMessage>,
+    persister_snd: Sender<ProcessorMessage>,
+    downstream_snd: Sender<DownstreamMessage>,
+    config: Option<String>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        info!("Config poller started");
+        let mut current = initial_config.clone();
+        loop {
+            if ctrl.is_stopped() {
+                break;
+            }
+
+            match get_app_config(config.clone()) {
+                Ok(config) => {
+                    if !current.eq(&config) {
+                        if let Err(e) = prc_snd.send(ProcessorMessage::ConfigChange(config.clone()))
+                        {
+                            error!("Error sending config change to processor: {}", e);
+                        }
+                        if let Err(e) =
+                            persister_snd.send(ProcessorMessage::ConfigChange(config.clone()))
+                        {
+                            error!("Error sending config change to processor: {}", e);
+                        }
+                        if let Err(e) =
+                            downstream_snd.send(DownstreamMessage::ConfigChange(config.clone()))
+                        {
+                            error!("Error sending config change to processor: {}", e);
+                        }
+                        current = config;
+                    } else {
+                        debug!("No config changed")
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to reload app config: {}", e);
+                }
+            }
+
+            sleep(Duration::from_secs(1)).await;
+        }
+        info!("Config poller stopped");
+    })
+}
 
 pub fn get_config_file_path() -> String {
     let env = get_env();
@@ -20,10 +81,10 @@ pub fn get_config_file_path() -> String {
     }
 }
 
-pub fn get_app_config(config: Option<String>) -> IndexCollectorAppConfig {
+pub fn get_app_config(config: Option<String>) -> Result<IndexCollectorAppConfig, String> {
     let config_file = config.unwrap_or_else(|| get_config_file_path());
 
-    info!("Using configuration file from {0}", config_file);
+    debug!("Using configuration file from {0}", config_file);
 
     IndexCollectorAppConfig::from_file(config_file)
 }
@@ -32,27 +93,27 @@ pub fn get_env() -> String {
     env::var("ENV").unwrap_or(LOCAL.to_string())
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct IndexCollectorAppConfig {
     #[serde(alias = "priceFeeds")]
     pub price_feeds: HashMap<Asset, Vec<PriceFeedConfig>>,
-    pub downstream: DownstreamConfig
+    pub downstream: DownstreamConfig,
 }
 
 impl IndexCollectorAppConfig {
-    pub fn from_file(path: String) -> IndexCollectorAppConfig {
-        let config = fs::read_to_string(path.clone())
-            .expect(format!("Failed to read app_config file: {}", path).as_str());
-
-        let config: IndexCollectorAppConfig = serde_json::from_str(&config)
-            .expect(format!("Failed to parse app_config file: {}", path).as_str());
-
-        match config.validate() {
-            Ok(_) => config,
-            Err(validation_error) => {
-                error!("Failed to validate app_config: {}", validation_error);
-                panic!("{}", validation_error);
-            }
+    pub fn from_file(path: String) -> Result<IndexCollectorAppConfig, String> {
+        match fs::read_to_string(path.clone()) {
+            Ok(string) => match serde_json::from_str::<IndexCollectorAppConfig>(&string) {
+                Ok(config) => match config.validate() {
+                    Ok(_) => Ok(config),
+                    Err(validation_error) => {
+                        error!("Failed to validate app_config: {}", validation_error);
+                        Err(validation_error)
+                    }
+                },
+                Err(e) => Err(format!("Failed to parse app config file: {} {}", path, e)),
+            },
+            Err(_) => Err(format!("Failed to read app_config file: {}", path)),
         }
     }
 
@@ -80,7 +141,7 @@ impl IndexCollectorAppConfig {
 }
 
 // Price upstream struct to hold data and configurations
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct PriceFeedConfig {
     pub source: Source,
     // TODO: support list of assets
@@ -103,14 +164,16 @@ impl PriceFeedConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct DownstreamConfig {
     pub url: String,
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::app_config::app_config::{DownstreamConfig, IndexCollectorAppConfig, PriceFeedConfig};
+    use crate::app_config::app_config::{
+        DownstreamConfig, IndexCollectorAppConfig, PriceFeedConfig,
+    };
     use crate::index_collector::index_collector::{Asset, SmoothingAlgorithm, Source};
     use std::collections::HashMap;
     use std::str::FromStr;
@@ -144,7 +207,12 @@ mod tests {
         );
 
         // when
-        let config = IndexCollectorAppConfig { price_feeds, downstream: DownstreamConfig { url: "".to_string() } };
+        let config = IndexCollectorAppConfig {
+            price_feeds,
+            downstream: DownstreamConfig {
+                url: "".to_string(),
+            },
+        };
 
         // then
         if let Err(validation_error) = config.validate() {
@@ -183,7 +251,12 @@ mod tests {
         );
 
         // when
-        let config = IndexCollectorAppConfig { price_feeds, downstream: DownstreamConfig { url: "".to_string() } };
+        let config = IndexCollectorAppConfig {
+            price_feeds,
+            downstream: DownstreamConfig {
+                url: "".to_string(),
+            },
+        };
 
         // then
         if let Err(validation_error) = config.validate() {

@@ -1,29 +1,31 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::thread;
-use std::time::Duration;
+use crate::downstream::downstream_sender::DownstreamMessage;
+use crate::index_collector::processor::ProcessorMessage;
 use crossbeam_channel::Sender;
 use log::{error, info};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use signal_hook::low_level::exit;
-use crate::downstream::downstream_sender::DownstreamMessage;
-use crate::index_collector::processor::ProcessorMessage;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 const RUN: u8 = 0;
 const STOP: u8 = 2;
 
 pub fn start_signal_handler(control: Arc<Control>) {
     let mut signals = Signals::new([SIGINT, SIGTERM]).expect("signal handler created");
-    thread::spawn(move || {
-        for sig in signals.forever() {
-            info!("Received signal {:?}", sig);
-            control.stop();
-            thread::sleep(Duration::from_secs(1));
-            exit(0);
-        }
-    });
-
+    thread::Builder::new()
+        .name("signal_handler".to_string())
+        .spawn(move || {
+            for sig in signals.forever() {
+                info!("Received signal {:?}", sig);
+                control.stop();
+                thread::sleep(Duration::from_secs(1));
+                exit(0);
+            }
+        })
+        .expect("Failed to spawn signal handler thread");
 }
 
 pub struct Control {
@@ -34,15 +36,16 @@ pub struct Control {
 }
 
 impl Control {
-    pub fn new(proc_snd: Sender<ProcessorMessage>,
-               persister_snd: Sender<ProcessorMessage>,
-               d_snd: Sender<DownstreamMessage>
+    pub fn new(
+        proc_snd: Sender<ProcessorMessage>,
+        persister_snd: Sender<ProcessorMessage>,
+        d_snd: Sender<DownstreamMessage>,
     ) -> Control {
         Control {
             flag: AtomicU8::new(RUN),
             proc_snd,
             persister_snd,
-            d_snd
+            d_snd,
         }
     }
 
@@ -64,10 +67,5 @@ impl Control {
         if let Err(e) = self.d_snd.send(DownstreamMessage::Stop) {
             error!("sender stop send failed: {}", e);
         }
-
-    }
-
-    pub fn pause(&self) {
-        self.flag.store(PAUSE, Ordering::SeqCst)
     }
 }

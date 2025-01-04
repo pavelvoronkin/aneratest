@@ -1,13 +1,14 @@
-use crate::app_config::app_config::PriceFeedConfig;
+use crate::app_config::app_config::{IndexCollectorAppConfig, PriceFeedConfig};
+use crate::downstream::downstream_sender::DownstreamMessage;
 use crate::index_collector::index_collector::{Asset, IndexCollector, Source};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use log::{error, info};
 use std::collections::HashMap;
 use std::thread::JoinHandle;
-use crate::downstream::downstream_sender::DownstreamMessage;
 
 pub enum ProcessorMessage {
     Price(f64, Asset, Source),
+    ConfigChange(IndexCollectorAppConfig),
     Stop,
 }
 
@@ -29,13 +30,19 @@ pub fn start(
                     Ok(ProcessorMessage::Price(price, asset, source)) => {
                         collector.collect_price(price, &asset, &source);
                         let index_price = collector.get_index_price(&asset);
-                        if let Err(e) = sender.try_send(DownstreamMessage::Index(index_price, asset.clone())) {
+                        if let Err(e) =
+                            sender.try_send(DownstreamMessage::Index(index_price, asset.clone()))
+                        {
                             error!("Error sending index to downstream {}", e);
                         }
                     }
                     Ok(ProcessorMessage::Stop) => {
                         info!("{} received stop", name);
                         stop_flag = true;
+                    }
+                    Ok(ProcessorMessage::ConfigChange(config)) => {
+                        info!("processor received config change");
+                        collector.init(config.price_feeds);
                     }
                     Err(_) => {}
                 }
