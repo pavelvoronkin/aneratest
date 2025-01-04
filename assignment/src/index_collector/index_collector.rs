@@ -86,6 +86,7 @@ impl IndexCollector {
         // remove not existing settings
         self.config.retain(|k, _| new_config.contains_key(k));
         self.smoothing.retain(|k, _| new_config.contains_key(k));
+        self.state.retain(|k, _| new_config.contains_key(k));
     }
 
     pub fn collect_price(&mut self, price: f64, asset: &Asset, source: &Source) {
@@ -97,26 +98,30 @@ impl IndexCollector {
         self.state.insert(feed_id, smoothed_price);
     }
 
-    pub fn get_index_price(&self, asset: &Asset) -> f64 {
+    pub fn get_index_price(&self, asset: &Asset) -> Option<f64> {
         let mut weighted = 0.0;
         for (feed_id, price) in &self.state {
-            if feed_id.contains(asset) {
+            if feed_id.contains(asset) && self.config.contains_key(feed_id) {
                 let weight = self.config.get(feed_id).expect("config expected").weight;
                 weighted += price * weight as f64 / 100.0;
             }
         }
-        weighted
+        if weighted == 0.0 {
+            None
+        } else {
+            Some(weighted)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::app_config::app_config::PriceFeedConfig;
+    use crate::index_collector::index_collector::SmoothingAlgorithm::{EMA, SMA};
     use crate::index_collector::index_collector::{
-        Asset, IndexCollector, SmoothingAlgorithm, Source,
+        IndexCollector, SmoothingAlgorithm, Source,
     };
     use std::collections::HashMap;
-    use crate::index_collector::index_collector::SmoothingAlgorithm::{EMA, SMA};
 
     #[test]
     fn test_index_with_smoothing() {
@@ -181,7 +186,7 @@ mod tests {
         collector.collect_price(40.0, &asset1, &Source::Kraken);
 
         // then: (10+20)/2 * 0.6 + (30+40)/2 * 0.4
-        assert_eq!(collector.get_index_price(&asset1), 23.0);
+        assert_eq!(collector.get_index_price(&asset1), Some(23.0));
     }
 
     #[test]
@@ -224,7 +229,7 @@ mod tests {
         collector.collect_price(40.0, &asset1, &Source::Kraken);
 
         // then: 20 * 0.6 + 40 * 0.4
-        assert_eq!(collector.get_index_price(&asset1), 28.0);
+        assert_eq!(collector.get_index_price(&asset1), Some(28.0));
     }
 
     #[test]
@@ -235,31 +240,27 @@ mod tests {
         let asset2 = "ETH".to_string();
         price_feeds.insert(
             asset1.clone(),
-            vec![
-                PriceFeedConfig {
-                    source: Source::Coinbase,
-                    asset: asset1.clone(),
-                    smoothing: Some(SMA),
-                    url_pattern: "".to_string(),
-                    weight: 60,
-                    enabled: true,
-                    fail_count_warn: None,
-                },
-            ],
+            vec![PriceFeedConfig {
+                source: Source::Coinbase,
+                asset: asset1.clone(),
+                smoothing: Some(SMA),
+                url_pattern: "".to_string(),
+                weight: 60,
+                enabled: true,
+                fail_count_warn: None,
+            }],
         );
         price_feeds.insert(
             asset2.clone(),
-            vec![
-                PriceFeedConfig {
-                    source: Source::Coinbase,
-                    asset: asset2.clone(),
-                    smoothing: Some(SMA),
-                    url_pattern: "".to_string(),
-                    weight: 60,
-                    enabled: true,
-                    fail_count_warn: None,
-                },
-            ],
+            vec![PriceFeedConfig {
+                source: Source::Coinbase,
+                asset: asset2.clone(),
+                smoothing: Some(SMA),
+                url_pattern: "".to_string(),
+                weight: 60,
+                enabled: true,
+                fail_count_warn: None,
+            }],
         );
 
         // and
@@ -269,17 +270,15 @@ mod tests {
         let mut new_price_feeds = HashMap::new();
         new_price_feeds.insert(
             asset1.clone(),
-            vec![
-                PriceFeedConfig {
-                    source: Source::Coinbase,
-                    asset: asset1.clone(),
-                    smoothing: Some(EMA),
-                    url_pattern: "".to_string(),
-                    weight: 60,
-                    enabled: true,
-                    fail_count_warn: None,
-                },
-            ],
+            vec![PriceFeedConfig {
+                source: Source::Coinbase,
+                asset: asset1.clone(),
+                smoothing: Some(EMA),
+                url_pattern: "".to_string(),
+                weight: 60,
+                enabled: true,
+                fail_count_warn: None,
+            }],
         );
         collector.init(new_price_feeds);
 

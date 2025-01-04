@@ -6,7 +6,7 @@ use assignment::app_config::app_config;
 use assignment::app_config::app_config::{
     start_config_poller_task, IndexCollectorAppConfig, PriceFeedConfig,
 };
-use assignment::app_config::control::{start_signal_handler, Control};
+use assignment::app_config::control::{start_signal_handler_thread, Control};
 use assignment::downstream::downstream_sender;
 use assignment::downstream::downstream_sender::DownstreamMessage;
 use assignment::index_collector::index_collector::{IndexCollector, SmoothingAlgorithm, Source};
@@ -17,7 +17,7 @@ use assignment::infra::clock;
 use assignment::persistence;
 use assignment::persistence::persistence_sender;
 use assignment::upstream::price_feed;
-use assignment::upstream::price_feed::PriceFeed;
+use assignment::upstream::price_feed::{start_price_feed_man_control_task, PriceFeed, PriceFeedManager, PriceFeedManagerMessage};
 use assignment::web::controller;
 use assignment::web::state::WebAppState;
 use crossbeam_channel::{unbounded, Sender};
@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use structopt::StructOpt;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 #[derive(StructOpt, Debug)]
@@ -54,41 +55,39 @@ async fn main() {
         Ok(config) => {
             info!("app_config: {:?}", config);
 
-            let (proc_snd, proc_rcv) = unbounded::<ProcessorMessage>();
-            let (persister_snd, persister_rcv) = unbounded::<ProcessorMessage>();
-            let (downstream_snd, downstream_rcv) = unbounded::<DownstreamMessage>();
+            let (proc_tx, proc_rx) = unbounded::<ProcessorMessage>();
+            let (persister_tx, persister_rx) = unbounded::<ProcessorMessage>();
+            let (downstream_tx, downstream_rx) = unbounded::<DownstreamMessage>();
+            let (upstream_tx, upstream_rx) = mpsc::unbounded_channel::<PriceFeedManagerMessage>();
 
             let control = Arc::new(Control::new(
-                proc_snd.clone(),
-                persister_snd.clone(),
-                downstream_snd.clone(),
+                proc_tx.clone(),
+                persister_tx.clone(),
+                downstream_tx.clone(),
+                upstream_tx.clone()
             ));
 
-            start_signal_handler(control.clone());
+            start_signal_handler_thread(control.clone());
 
             start_config_poller_task(
                 control.clone(),
                 config.clone(),
-                proc_snd.clone(),
-                persister_snd.clone(),
-                downstream_snd.clone(),
+                upstream_tx.clone(),
+                proc_tx.clone(),
+                persister_tx.clone(),
+                downstream_tx.clone(),
+
                 args.config,
             );
 
-            for (_, price_feed_configs) in config.price_feeds.clone() {
-                for price_feed_cfg in price_feed_configs {
-                    price_feed::spawn_fetch_task(
-                        &price_feed_cfg,
-                        control.clone(),
-                        proc_snd.clone(),
-                        persister_snd.clone(),
-                    );
-                }
-            }
+            let mut price_feed_man = PriceFeedManager::new(control.clone(), proc_tx.clone(), persister_tx.clone());
+            price_feed_man.init(config.price_feeds.clone());
 
-            processor::start(proc_rcv, downstream_snd, config.price_feeds);
-            downstream_sender::start(downstream_rcv, config.downstream);
-            persistence_sender::start(persister_rcv);
+            start_price_feed_man_control_task(price_feed_man, upstream_rx);
+
+            processor::start(proc_rx, downstream_tx, config.price_feeds);
+            downstream_sender::start(downstream_rx, config.downstream);
+            persistence_sender::start(persister_rx);
 
             start_http_server().await;
         }

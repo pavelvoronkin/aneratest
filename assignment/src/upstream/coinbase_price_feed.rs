@@ -1,6 +1,6 @@
 use crate::upstream::price_feed::{FeedErr, PriceFeed};
 use async_trait::async_trait;
-use log::error;
+use log::{error, info};
 use reqwest::StatusCode;
 use serde::Deserialize;
 use std::collections::HashMap;

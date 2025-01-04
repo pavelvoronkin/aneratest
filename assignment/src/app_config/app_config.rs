@@ -3,7 +3,7 @@ use crate::app_config::control::Control;
 use crate::downstream::downstream_sender::DownstreamMessage;
 use crate::index_collector::index_collector::{Asset, FeedId, SmoothingAlgorithm, Source};
 use crate::index_collector::processor::ProcessorMessage;
-use crate::upstream::price_feed::FeedErr;
+use crate::upstream::price_feed::{FeedErr, PriceFeedManagerMessage};
 use crossbeam_channel::Sender;
 use log::{debug, error, info};
 use serde::Deserialize;
@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{env, fs, thread};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
@@ -25,6 +26,7 @@ const PROD: &'static str = "prod";
 pub fn start_config_poller_task(
     ctrl: Arc<Control>,
     initial_config: IndexCollectorAppConfig,
+    upstream_tx: mpsc::UnboundedSender<PriceFeedManagerMessage>,
     prc_snd: Sender<ProcessorMessage>,
     persister_snd: Sender<ProcessorMessage>,
     downstream_snd: Sender<DownstreamMessage>,
@@ -41,6 +43,11 @@ pub fn start_config_poller_task(
             match get_app_config(config.clone()) {
                 Ok(config) => {
                     if !current.eq(&config) {
+                        if let Err(e) = upstream_tx.send(PriceFeedManagerMessage::ConfigChange(config.clone()))
+                        {
+                            error!("Error sending config change to processor: {}", e);
+                        }
+
                         if let Err(e) = prc_snd.send(ProcessorMessage::ConfigChange(config.clone()))
                         {
                             error!("Error sending config change to processor: {}", e);

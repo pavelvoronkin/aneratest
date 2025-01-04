@@ -9,11 +9,14 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
+use crate::index_collector::processor::ProcessorMessage::Price;
+use crate::upstream::price_feed::PriceFeedManagerMessage;
 
 const RUN: u8 = 0;
 const STOP: u8 = 2;
 
-pub fn start_signal_handler(control: Arc<Control>) {
+pub fn start_signal_handler_thread(control: Arc<Control>) {
     let mut signals = Signals::new([SIGINT, SIGTERM]).expect("signal handler created");
     thread::Builder::new()
         .name("signal_handler".to_string())
@@ -21,8 +24,7 @@ pub fn start_signal_handler(control: Arc<Control>) {
             for sig in signals.forever() {
                 info!("Received signal {:?}", sig);
                 control.stop();
-                thread::sleep(Duration::from_secs(1));
-                exit(0);
+                thread::sleep(Duration::from_secs(10));
             }
         })
         .expect("Failed to spawn signal handler thread");
@@ -32,20 +34,23 @@ pub struct Control {
     flag: AtomicU8,
     proc_snd: Sender<ProcessorMessage>,
     persister_snd: Sender<ProcessorMessage>,
-    d_snd: Sender<DownstreamMessage>,
+    downstream_tx: Sender<DownstreamMessage>,
+    upstream_tx: UnboundedSender<PriceFeedManagerMessage>,
 }
 
 impl Control {
     pub fn new(
         proc_snd: Sender<ProcessorMessage>,
         persister_snd: Sender<ProcessorMessage>,
-        d_snd: Sender<DownstreamMessage>,
+        downstream_tx: Sender<DownstreamMessage>,
+        up_tx: UnboundedSender<PriceFeedManagerMessage>,
     ) -> Control {
         Control {
             flag: AtomicU8::new(RUN),
             proc_snd,
             persister_snd,
-            d_snd,
+            downstream_tx,
+            upstream_tx: up_tx
         }
     }
 
@@ -56,6 +61,10 @@ impl Control {
     pub fn stop(&self) {
         self.flag.store(STOP, Ordering::SeqCst);
 
+        if let Err(e) = self.upstream_tx.send(PriceFeedManagerMessage::Stop) {
+            error!("upstream stop send failed: {}", e);
+        }
+
         if let Err(e) = self.proc_snd.send(ProcessorMessage::Stop) {
             error!("processor stop send failed: {}", e);
         }
@@ -64,8 +73,8 @@ impl Control {
             error!("persister stop send failed: {}", e);
         }
 
-        if let Err(e) = self.d_snd.send(DownstreamMessage::Stop) {
-            error!("sender stop send failed: {}", e);
+        if let Err(e) = self.downstream_tx.send(DownstreamMessage::Stop) {
+            error!("downstream stop send failed: {}", e);
         }
     }
 }

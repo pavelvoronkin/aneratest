@@ -29,20 +29,21 @@ pub fn start(
                 match receiver.try_recv() {
                     Ok(ProcessorMessage::Price(price, asset, source)) => {
                         collector.collect_price(price, &asset, &source);
-                        let index_price = collector.get_index_price(&asset);
-                        if let Err(e) =
-                            sender.try_send(DownstreamMessage::Index(index_price, asset.clone()))
-                        {
-                            error!("Error sending index to downstream {}", e);
+                        if let Some(index_price) = collector.get_index_price(&asset) {
+                            if let Err(e) =
+                                sender.try_send(DownstreamMessage::Index(index_price, asset.clone()))
+                            {
+                                error!("Error sending index to downstream {}", e);
+                            }
                         }
                     }
                     Ok(ProcessorMessage::Stop) => {
                         info!("{} received stop", name);
                         stop_flag = true;
                     }
-                    Ok(ProcessorMessage::ConfigChange(config)) => {
+                    Ok(ProcessorMessage::ConfigChange(cfg)) => {
                         info!("processor received config change");
-                        collector.init(config.price_feeds);
+                        collector.init(cfg.price_feeds);
                     }
                     Err(_) => {}
                 }
