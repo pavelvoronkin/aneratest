@@ -51,13 +51,14 @@ async fn main() {
     let config = app_config::get_app_config(args.config);
     debug!("app_config: {:?}", config);
 
-    let control = Arc::new(Control::new());
-
-    start_signal_handler(control.clone());
-
     let (proc_snd, proc_rcv) = unbounded::<ProcessorMessage>();
     let (persister_snd, perister_rcv) = unbounded::<ProcessorMessage>();
     let (d_snd, d_rcv) = unbounded::<DownstreamMessage>();
+
+    let control = Arc::new(Control::new(proc_snd.clone(), persister_snd.clone(), d_snd.clone()));
+
+    start_signal_handler(control.clone());
+
 
     for (_, price_feed_configs) in config.price_feeds.clone() {
         for price_feed_cfg in price_feed_configs {

@@ -15,7 +15,7 @@ pub fn start(
     receiver: Receiver<DownstreamMessage>,
     downstream_config: DownstreamConfig
 ) -> JoinHandle<()> {
-    let name = String::from("downstream-task");
+    let name = String::from("downstream_sender");
     tokio::spawn(async move {
         info!("started {}", name);
         let mut stop_flag = false;

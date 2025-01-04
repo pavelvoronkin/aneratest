@@ -2,10 +2,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 use std::time::Duration;
-use log::info;
+use crossbeam_channel::Sender;
+use log::{error, info};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use signal_hook::low_level::exit;
+use crate::downstream::downstream_sender::DownstreamMessage;
+use crate::index_collector::processor::ProcessorMessage;
 
 const RUN: u8 = 0;
 const PAUSE: u8 = 1;
@@ -26,12 +29,21 @@ pub fn start_signal_handler(control: Arc<Control>) {
 
 pub struct Control {
     flag: AtomicU8,
+    proc_snd: Sender<ProcessorMessage>,
+    persister_snd: Sender<ProcessorMessage>,
+    d_snd: Sender<DownstreamMessage>,
 }
 
 impl Control {
-    pub fn new() -> Control {
+    pub fn new(proc_snd: Sender<ProcessorMessage>,
+               persister_snd: Sender<ProcessorMessage>,
+               d_snd: Sender<DownstreamMessage>
+    ) -> Control {
         Control {
             flag: AtomicU8::new(0),
+            proc_snd,
+            persister_snd,
+            d_snd
         }
     }
 
@@ -44,6 +56,18 @@ impl Control {
     }
 
     pub fn stop(&self) {
+        if let Err(e) = self.proc_snd.send(ProcessorMessage::Stop) {
+            error!("processor stop send failed: {}", e);
+        }
+
+        if let Err(e) = self.persister_snd.send(ProcessorMessage::Stop) {
+            error!("processor stop send failed: {}", e);
+        }
+
+        if let Err(e) = self.d_snd.send(DownstreamMessage::Stop) {
+            error!("processor stop send failed: {}", e);
+        }
+
         self.flag.store(STOP, Ordering::SeqCst)
     }
 
