@@ -17,8 +17,9 @@ use crate::upstream::price_feed;
 
 pub fn spawn_fetch_task(
     price_feed_cfg: &PriceFeedConfig,
-    ctl: Arc<Control>,
-    sender: Sender<ProcessorMessage>,
+    ctrl: Arc<Control>,
+    proc_sender: Sender<ProcessorMessage>,
+    persister_sender: Sender<ProcessorMessage>,
 ) -> JoinHandle<()> {
     let fail_count_warn = price_feed_cfg.fail_count_warn.unwrap_or(5);
     let source = price_feed_cfg.source.clone();
@@ -28,12 +29,12 @@ pub fn spawn_fetch_task(
         let mut last_paused_msg = clock::current_timestamp();
         let mut fail_count = 0;
         loop {
-            if ctl.is_stopped() {
+            if ctrl.is_stopped() {
                 info!("price upstream {} stopped", &source);
                 break;
             }
 
-            if ctl.is_paused() {
+            if ctrl.is_paused() {
                 let now = clock::current_timestamp();
                 if now - last_paused_msg > 1000 {
                     info!("price upstream {} paused", &source);
@@ -45,12 +46,22 @@ pub fn spawn_fetch_task(
                 Ok(price) => {
                     fail_count = 0;
                     trace!("price upstream {} fetched {}", source, price);
-                    if let Err(e) = sender.try_send(ProcessorMessage::Price(
+
+                    // maybe replace with fan?
+                    if let Err(e) = proc_sender.try_send(ProcessorMessage::Price(
                         price,
                         asset.clone(),
                         source.clone(),
                     )) {
-                        error!("Error try_send price fetched {}: {}", source, e);
+                        error!("Error try_send {} to processor: {}", source, e);
+                    }
+
+                    if let Err(e) = persister_sender.try_send(ProcessorMessage::Price(
+                        price,
+                        asset.clone(),
+                        source.clone(),
+                    )) {
+                        error!("Error try_send {} to persister: {}", source, e);
                     }
                 }
                 Err(e) => {

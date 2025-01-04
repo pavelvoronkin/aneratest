@@ -36,6 +36,7 @@ pub fn get_env() -> String {
 pub struct IndexCollectorAppConfig {
     #[serde(alias = "priceFeeds")]
     pub price_feeds: HashMap<Asset, Vec<PriceFeedConfig>>,
+    pub downstream: DownstreamConfig
 }
 
 impl IndexCollectorAppConfig {
@@ -101,9 +102,14 @@ impl PriceFeedConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct DownstreamConfig {
+    pub url: String,
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::app_config::app_config::{IndexCollectorAppConfig, PriceFeedConfig};
+    use crate::app_config::app_config::{DownstreamConfig, IndexCollectorAppConfig, PriceFeedConfig};
     use crate::index_collector::index_collector::{Asset, SmoothingAlgorithm, Source};
     use std::collections::HashMap;
     use std::str::FromStr;
@@ -135,7 +141,7 @@ mod tests {
         );
 
         // when
-        let config = IndexCollectorAppConfig { price_feeds };
+        let config = IndexCollectorAppConfig { price_feeds, downstream: DownstreamConfig { url: "".to_string() } };
 
         // then
         if let Err(validation_error) = config.validate() {
@@ -172,7 +178,7 @@ mod tests {
         );
 
         // when
-        let config = IndexCollectorAppConfig { price_feeds };
+        let config = IndexCollectorAppConfig { price_feeds, downstream: DownstreamConfig { url: "".to_string() } };
 
         // then
         if let Err(validation_error) = config.validate() {

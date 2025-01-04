@@ -9,5 +9,8 @@
         "urlPattern": "https://api.coinbase.com/v2/exchange-rates?currency={{asset}}"
       }
     ]
+  },
+  "downstream": {
+    "url": "http://127.0.0.1:8080/api/v1/callback"
   }
 }

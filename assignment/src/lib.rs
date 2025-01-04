@@ -4,3 +4,4 @@ pub mod index_collector;
 pub mod infra;
 pub mod upstream;
 pub mod web;
+pub mod persistence;
