@@ -4,35 +4,25 @@ use actix_web::{web, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use assignment::app_config::app_config;
 use assignment::app_config::app_config::{
-    start_config_poller_task, IndexCollectorAppConfig, PriceFeedConfig,
+    start_config_poller_task, ConfigPollerMessage,
 };
-use assignment::app_config::control::{start_signal_handler_thread, Control};
+use assignment::app_config::signal_handler::start_signal_handler_thread;
 use assignment::downstream::downstream_sender;
 use assignment::downstream::downstream_sender::DownstreamMessage;
-use assignment::index_collector::index_collector::{IndexCollector, SmoothingAlgorithm, Source};
 use assignment::index_collector::processor;
 use assignment::index_collector::processor::ProcessorMessage;
-use assignment::index_collector::smoothing::{EMASmoothing, SMASmoothing};
-use assignment::infra::clock;
-use assignment::persistence;
 use assignment::persistence::persistence_sender;
-use assignment::upstream::price_feed;
-use assignment::upstream::price_feed::{start_price_feed_man_control_task, PriceFeed, PriceFeedManager, PriceFeedManagerMessage};
+use assignment::persistence::persistence_sender::PersisterMessage;
+use assignment::upstream::price_feed::{
+    start_price_feed_man_control_task, PriceFeedManager, PriceFeedManagerMessage,
+};
 use assignment::web::controller;
 use assignment::web::state::WebAppState;
-use crossbeam_channel::{unbounded, Sender};
-use log::{debug, error, info, trace, warn};
-use signal_hook::consts::{SIGINT, SIGTERM};
-use signal_hook::iterator::Signals;
+use crossbeam_channel::unbounded;
+use log::{error, info};
 use signal_hook::low_level::exit;
-use std::alloc::System;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 use structopt::StructOpt;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
@@ -56,37 +46,38 @@ async fn main() {
             info!("app_config: {:?}", config);
 
             let (proc_tx, proc_rx) = unbounded::<ProcessorMessage>();
-            let (persister_tx, persister_rx) = unbounded::<ProcessorMessage>();
-            let (downstream_tx, downstream_rx) = unbounded::<DownstreamMessage>();
+            let (persister_tx, persister_rx) = unbounded::<PersisterMessage>();
+            let (downstream_tx, downstream_rx) = mpsc::unbounded_channel::<DownstreamMessage>();
             let (upstream_tx, upstream_rx) = mpsc::unbounded_channel::<PriceFeedManagerMessage>();
+            let (config_poller_tx, config_poller_rx) = unbounded::<ConfigPollerMessage>();
 
-            let control = Arc::new(Control::new(
+            start_signal_handler_thread(
                 proc_tx.clone(),
                 persister_tx.clone(),
                 downstream_tx.clone(),
-                upstream_tx.clone()
-            ));
-
-            start_signal_handler_thread(control.clone());
+                upstream_tx.clone(),
+                config_poller_tx,
+            );
 
             start_config_poller_task(
-                control.clone(),
                 config.clone(),
                 upstream_tx.clone(),
                 proc_tx.clone(),
                 persister_tx.clone(),
                 downstream_tx.clone(),
-
+                config_poller_rx,
                 args.config,
             );
 
-            let mut price_feed_man = PriceFeedManager::new(control.clone(), proc_tx.clone(), persister_tx.clone());
+            let mut price_feed_man = PriceFeedManager::new(proc_tx.clone(), persister_tx.clone());
             price_feed_man.init(config.price_feeds.clone());
 
             start_price_feed_man_control_task(price_feed_man, upstream_rx);
 
             processor::start(proc_rx, downstream_tx, config.price_feeds);
+
             downstream_sender::start(downstream_rx, config.downstream);
+
             persistence_sender::start(persister_rx);
 
             start_http_server().await;

@@ -1,4 +1,4 @@
-use crate::app_config::app_config::{IndexCollectorAppConfig, PriceFeedConfig};
+use crate::app_config::app_config::PriceFeedConfig;
 use crate::index_collector::smoothing::{EMASmoothing, SMASmoothing, Smoothing};
 use log::info;
 use serde::Deserialize;
@@ -25,8 +25,7 @@ pub type FeedId = String;
 pub struct IndexCollector {
     config: HashMap<FeedId, PriceFeedConfig>,
     smoothing: HashMap<FeedId, Box<dyn Smoothing>>,
-    state: HashMap<FeedId, f64>,
-    index: HashMap<Asset, f64>,
+    state: HashMap<FeedId, f64>
 }
 
 impl IndexCollector {
@@ -35,7 +34,6 @@ impl IndexCollector {
             config: Default::default(),
             smoothing: Default::default(),
             state: Default::default(),
-            index: Default::default(),
         };
 
         collector.init(map);
@@ -118,9 +116,7 @@ impl IndexCollector {
 mod tests {
     use crate::app_config::app_config::PriceFeedConfig;
     use crate::index_collector::index_collector::SmoothingAlgorithm::{EMA, SMA};
-    use crate::index_collector::index_collector::{
-        IndexCollector, SmoothingAlgorithm, Source,
-    };
+    use crate::index_collector::index_collector::{IndexCollector, SmoothingAlgorithm, Source};
     use std::collections::HashMap;
 
     #[test]
@@ -194,7 +190,6 @@ mod tests {
         // given
         let mut price_feeds = HashMap::new();
         let asset1 = "BTC".to_string();
-        let asset2 = "ETH".to_string();
         price_feeds.insert(
             asset1.clone(),
             vec![

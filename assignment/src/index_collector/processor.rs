@@ -1,10 +1,11 @@
 use crate::app_config::app_config::{IndexCollectorAppConfig, PriceFeedConfig};
 use crate::downstream::downstream_sender::DownstreamMessage;
 use crate::index_collector::index_collector::{Asset, IndexCollector, Source};
-use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use crossbeam_channel::Receiver;
 use log::{error, info};
 use std::collections::HashMap;
 use std::thread::JoinHandle;
+use tokio::sync::mpsc::UnboundedSender;
 
 pub enum ProcessorMessage {
     Price(f64, Asset, Source),
@@ -14,7 +15,7 @@ pub enum ProcessorMessage {
 
 pub fn start(
     receiver: Receiver<ProcessorMessage>,
-    sender: Sender<DownstreamMessage>,
+    sender: UnboundedSender<DownstreamMessage>,
     map: HashMap<Asset, Vec<PriceFeedConfig>>,
 ) -> JoinHandle<()> {
     let name = String::from("processor");
@@ -31,7 +32,7 @@ pub fn start(
                         collector.collect_price(price, &asset, &source);
                         if let Some(index_price) = collector.get_index_price(&asset) {
                             if let Err(e) =
-                                sender.try_send(DownstreamMessage::Index(index_price, asset.clone()))
+                                sender.send(DownstreamMessage::Index(index_price, asset.clone()))
                             {
                                 error!("Error sending index to downstream {}", e);
                             }

@@ -1,64 +1,68 @@
-use crate::app_config::app_config;
-use crate::app_config::control::Control;
+
 use crate::downstream::downstream_sender::DownstreamMessage;
 use crate::index_collector::index_collector::{Asset, FeedId, SmoothingAlgorithm, Source};
 use crate::index_collector::processor::ProcessorMessage;
-use crate::upstream::price_feed::{FeedErr, PriceFeedManagerMessage};
-use crossbeam_channel::Sender;
+use crate::persistence::persistence_sender::PersisterMessage;
+use crossbeam_channel::{Receiver, Sender};
 use log::{debug, error, info};
 use serde::Deserialize;
-use signal_hook::consts::{SIGINT, SIGTERM};
-use signal_hook::iterator::Signals;
-use signal_hook::low_level::exit;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::time::Duration;
-use std::{env, fs, thread};
-use tokio::sync::mpsc;
+use std::{env, fs};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
+use crate::upstream::price_feed::PriceFeedManagerMessage;
 
 pub const LOCAL: &'static str = "local";
 pub const QA: &'static str = "qa";
 const TESTNET: &'static str = "testnet";
 const PROD: &'static str = "prod";
 
+pub enum ConfigPollerMessage {
+    Stop,
+}
+
 pub fn start_config_poller_task(
-    ctrl: Arc<Control>,
     initial_config: IndexCollectorAppConfig,
-    upstream_tx: mpsc::UnboundedSender<PriceFeedManagerMessage>,
-    prc_snd: Sender<ProcessorMessage>,
-    persister_snd: Sender<ProcessorMessage>,
-    downstream_snd: Sender<DownstreamMessage>,
+    upstream_tx: UnboundedSender<PriceFeedManagerMessage>,
+    prc_tx: Sender<ProcessorMessage>,
+    persister_tx: Sender<PersisterMessage>,
+    downstream_tx: UnboundedSender<DownstreamMessage>,
+    poller_rx: Receiver<ConfigPollerMessage>,
     config: Option<String>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         info!("Config poller started");
         let mut current = initial_config.clone();
         loop {
-            if ctrl.is_stopped() {
-                break;
+            match poller_rx.try_recv() {
+                Ok(_) => {
+                    break;
+                }
+                Err(_) => {}
             }
 
             match get_app_config(config.clone()) {
                 Ok(config) => {
                     if !current.eq(&config) {
-                        if let Err(e) = upstream_tx.send(PriceFeedManagerMessage::ConfigChange(config.clone()))
+                        if let Err(e) =
+                            upstream_tx.send(PriceFeedManagerMessage::ConfigChange(config.clone()))
                         {
                             error!("Error sending config change to processor: {}", e);
                         }
 
-                        if let Err(e) = prc_snd.send(ProcessorMessage::ConfigChange(config.clone()))
+                        if let Err(e) = prc_tx.send(ProcessorMessage::ConfigChange(config.clone()))
                         {
                             error!("Error sending config change to processor: {}", e);
                         }
                         if let Err(e) =
-                            persister_snd.send(ProcessorMessage::ConfigChange(config.clone()))
+                            persister_tx.send(PersisterMessage::ConfigChange(config.clone()))
                         {
                             error!("Error sending config change to processor: {}", e);
                         }
                         if let Err(e) =
-                            downstream_snd.send(DownstreamMessage::ConfigChange(config.clone()))
+                            downstream_tx.send(DownstreamMessage::ConfigChange(config.clone()))
                         {
                             error!("Error sending config change to processor: {}", e);
                         }

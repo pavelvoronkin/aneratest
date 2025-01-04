@@ -1,26 +1,23 @@
 use crate::app_config::app_config::{IndexCollectorAppConfig, PriceFeedConfig};
-use crate::app_config::control::Control;
 use crate::index_collector::index_collector::{Asset, FeedId, Source};
 use crate::index_collector::processor::ProcessorMessage;
-use crate::index_collector::smoothing::Smoothing;
-use crate::infra::clock;
+use crate::infra::clock::current_timestamp;
+use crate::persistence::persistence_sender::PersisterMessage;
 use crate::upstream::coinbase_price_feed::CoinbasePriceFeed;
-use crate::upstream::price_feed;
 use async_trait::async_trait;
 use crossbeam_channel::Sender;
 use log::{debug, error, info, trace, warn};
-use reqwest::StatusCode;
-use serde::Deserialize;
 use std::collections::HashMap;
-use std::num::ParseFloatError;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot::error::TryRecvError;
-use tokio::sync::oneshot::Receiver;
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::time::sleep;
+
+const STATE_RUNNING: u8 = 0;
+const STATE_PAUSED: u8 = 1;
+const STATE_STOPPED: u8 = 2;
 
 pub enum PriceFeedManagerMessage {
     ConfigChange(IndexCollectorAppConfig),
@@ -28,49 +25,58 @@ pub enum PriceFeedManagerMessage {
 }
 
 pub struct PriceFeedManager {
-    ctrl: Arc<Control>,
-    proc_snd: Sender<ProcessorMessage>,
-    persister_snd: Sender<ProcessorMessage>,
-    pub tasks: HashMap<FeedId, Arc<AtomicBool>>,
+    proc_tx: Sender<ProcessorMessage>,
+    persister_tx: Sender<PersisterMessage>,
+    tasks: HashMap<FeedId, Arc<AtomicU8>>,
 }
 
 impl PriceFeedManager {
-    pub fn new(
-        ctrl: Arc<Control>,
-        proc_snd: Sender<ProcessorMessage>,
-        persister_snd: Sender<ProcessorMessage>,
-    ) -> Self {
+    pub fn new(proc_tx: Sender<ProcessorMessage>, persister_tx: Sender<PersisterMessage>) -> Self {
         Self {
-            ctrl,
-            proc_snd,
-            persister_snd,
+            proc_tx,
+            persister_tx,
             tasks: HashMap::new(),
         }
     }
 
     pub fn init(&mut self, feeds: HashMap<Asset, Vec<PriceFeedConfig>>) {
         let mut map = HashMap::new();
+
         for (_, price_feed_configs) in feeds {
             for price_feed_cfg in price_feed_configs {
                 let key = price_feed_cfg.key();
                 map.insert(key.clone(), price_feed_cfg.clone());
-                if !self.tasks.contains_key(&key) {
-                    let stop_flag = start_fetch_task(
-                        price_feed_cfg,
-                        self.proc_snd.clone(),
-                        self.persister_snd.clone(),
+                if let Some(task_state) = self.tasks.get(&key) {
+                    info!(
+                        "Update task {} state to enabled = {}",
+                        key, price_feed_cfg.enabled
                     );
-                    self.tasks.insert(key, stop_flag);
+                    task_state.store(
+                        if price_feed_cfg.enabled {
+                            STATE_RUNNING
+                        } else {
+                            STATE_PAUSED
+                        },
+                        SeqCst,
+                    );
+                } else {
+                    let task_state = start_fetch_task(
+                        price_feed_cfg,
+                        self.proc_tx.clone(),
+                        self.persister_tx.clone(),
+                    );
+                    self.tasks.insert(key, task_state);
                 }
-
-
             }
         }
-        self.tasks.iter()
+
+        // stop tasks that no longer exists after config update
+        self.tasks
+            .iter()
             .filter(|item| !map.contains_key(item.0))
             .for_each(|item| {
                 info!("Stopping upstream task {}", item.0);
-                item.1.store(false, SeqCst);
+                item.1.store(STATE_STOPPED, SeqCst);
             });
 
         self.tasks.retain(|feed_id, _| map.contains_key(feed_id));
@@ -79,17 +85,24 @@ impl PriceFeedManager {
     pub fn stop_all(&self) {
         info!("Stopping all upstream tasks");
         for (_, tx) in &self.tasks {
-            tx.store(false, SeqCst);
+            tx.store(STATE_STOPPED, SeqCst);
         }
     }
 }
 
-pub fn start_price_feed_man_control_task(mut price_feed_man: PriceFeedManager, mut rcv: UnboundedReceiver<PriceFeedManagerMessage>) {
+const PAUSE_MESSAGE_INTERVAL_MS: i64 = 5000;
+
+pub fn start_price_feed_man_control_task(
+    mut price_feed_man: PriceFeedManager,
+    mut rcv: UnboundedReceiver<PriceFeedManagerMessage>,
+) {
     tokio::spawn(async move {
         loop {
             match rcv.recv().await {
                 Some(msg) => match msg {
-                    PriceFeedManagerMessage::ConfigChange(conf) => price_feed_man.init(conf.price_feeds),
+                    PriceFeedManagerMessage::ConfigChange(conf) => {
+                        price_feed_man.init(conf.price_feeds)
+                    }
                     PriceFeedManagerMessage::Stop => price_feed_man.stop_all(),
                 },
                 None => {}
@@ -98,14 +111,18 @@ pub fn start_price_feed_man_control_task(mut price_feed_man: PriceFeedManager, m
     });
 }
 
-
 fn start_fetch_task(
     price_feed_cfg: PriceFeedConfig,
-    proc_sender: Sender<ProcessorMessage>,
-    persister_sender: Sender<ProcessorMessage>,
-) -> Arc<AtomicBool> {
-    let flag = Arc::new(AtomicBool::new(true));
-    let f = flag.clone();
+    proc_tx: Sender<ProcessorMessage>,
+    persister_tx: Sender<PersisterMessage>,
+) -> Arc<AtomicU8> {
+    let state = Arc::new(AtomicU8::new(if price_feed_cfg.enabled {
+        STATE_RUNNING
+    } else {
+        STATE_PAUSED
+    }));
+    let state_clone = state.clone();
+
     tokio::spawn(async move {
         let key = price_feed_cfg.key();
         let mut fail_count = 0;
@@ -113,12 +130,29 @@ fn start_fetch_task(
         let source = price_feed_cfg.source.clone();
         let asset = price_feed_cfg.asset.clone();
         let price_feed = new_price_feed(&price_feed_cfg);
+        let mut last_pause_message_timestamp = 0;
         info!("Price upstream {} started", &key);
 
         loop {
-            if !f.load(Relaxed) {
+            let state = state_clone.load(Relaxed);
+            if state == STATE_STOPPED {
                 info!("Price upstream {} stopped", &key);
                 break;
+            }
+
+            if state == STATE_PAUSED {
+                if current_timestamp() - last_pause_message_timestamp > PAUSE_MESSAGE_INTERVAL_MS {
+                    info!("Price upstream {} paused", &key);
+                    last_pause_message_timestamp = current_timestamp();
+                }
+                /*
+                TODO: we are burning here too much, so i introduce some sleep,
+                    because in our arch we can change config not more frequently than every second, see start_config_poller_task.
+                    To improve this we may introduce some wake up call when change state from paused to running or stopped
+                */
+                sleep(Duration::from_millis(500)).await;
+
+                continue;
             }
 
             match price_feed.fetch().await {
@@ -127,7 +161,7 @@ fn start_fetch_task(
                     trace!("Price upstream {} fetched {}", key, price);
 
                     // maybe replace with fan?
-                    if let Err(e) = proc_sender.try_send(ProcessorMessage::Price(
+                    if let Err(e) = proc_tx.try_send(ProcessorMessage::Price(
                         price,
                         asset.clone(),
                         source.clone(),
@@ -135,7 +169,7 @@ fn start_fetch_task(
                         error!("Error try_send {} to processor: {}", key, e);
                     }
 
-                    if let Err(e) = persister_sender.try_send(ProcessorMessage::Price(
+                    if let Err(e) = persister_tx.try_send(PersisterMessage::Price(
                         price,
                         asset.clone(),
                         source.clone(),
@@ -157,7 +191,7 @@ fn start_fetch_task(
             };
         }
     });
-    flag
+    state
 }
 
 fn new_price_feed(cfg: &PriceFeedConfig) -> Box<dyn PriceFeed> {

@@ -1,11 +1,9 @@
-use crate::app_config::app_config::{DownstreamConfig, IndexCollectorAppConfig, PriceFeedConfig};
-use crate::index_collector::index_collector::{Asset, IndexCollector};
-use crate::index_collector::processor::ProcessorMessage;
-use crossbeam_channel::{Receiver, TryRecvError};
 use log::{debug, error, info};
 use reqwest::StatusCode;
-use std::collections::HashMap;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
+use crate::app_config::app_config::{DownstreamConfig, IndexCollectorAppConfig};
+use crate::index_collector::index_collector::Asset;
 
 pub enum DownstreamMessage {
     Index(f64, Asset),
@@ -14,7 +12,7 @@ pub enum DownstreamMessage {
 }
 
 pub fn start(
-    receiver: Receiver<DownstreamMessage>,
+    mut rx: UnboundedReceiver<DownstreamMessage>,
     downstream_config: DownstreamConfig,
 ) -> JoinHandle<()> {
     let name = String::from("downstream_sender");
@@ -23,8 +21,8 @@ pub fn start(
         let mut stop_flag = false;
         let mut current_config = downstream_config.clone();
         loop {
-            match receiver.try_recv() {
-                Ok(DownstreamMessage::Index(index_price, asset)) => {
+            match rx.recv().await {
+                Some(DownstreamMessage::Index(index_price, asset)) => {
                     let url = format!(
                         "{}?price={}&asset={}",
                         current_config.url.as_str(),
@@ -50,21 +48,21 @@ pub fn start(
                         }
                     }
                 }
-                Ok(DownstreamMessage::Stop) => {
+                Some(DownstreamMessage::Stop) => {
                     info!("{} received stop", name);
                     stop_flag = true;
                 }
-                Ok(DownstreamMessage::ConfigChange(config)) => {
+                Some(DownstreamMessage::ConfigChange(config)) => {
                     current_config = config.downstream.clone();
                     info!(
                         "Downstream sender received config change {:?}",
                         current_config
                     );
                 }
-                Err(_) => {}
+                _ => {}
             }
 
-            if stop_flag && receiver.is_empty() {
+            if stop_flag && rx.is_empty() {
                 break;
             }
         }

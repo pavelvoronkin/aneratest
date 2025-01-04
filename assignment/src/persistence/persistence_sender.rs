@@ -1,13 +1,17 @@
-use crate::app_config::app_config::PriceFeedConfig;
-use crate::index_collector::index_collector::{Asset, IndexCollector};
-use crate::index_collector::processor::ProcessorMessage;
-use crossbeam_channel::{Receiver, TryRecvError};
-use log::{debug, info};
-use std::collections::HashMap;
+use crate::index_collector::index_collector::{Asset, Source};
+use crossbeam_channel::{Receiver};
+use log::info;
 use std::process::exit;
 use std::thread::JoinHandle;
+use crate::app_config::app_config::IndexCollectorAppConfig;
 
-pub fn start(receiver: Receiver<ProcessorMessage>) -> JoinHandle<()> {
+pub enum PersisterMessage {
+    Price(f64, Asset, Source),
+    ConfigChange(IndexCollectorAppConfig),
+    Stop,
+}
+
+pub fn start(receiver: Receiver<PersisterMessage>) -> JoinHandle<()> {
     let name = String::from("persister");
     let fail_msg = format!("Couldn't start {}", name);
     std::thread::Builder::new()
@@ -17,14 +21,14 @@ pub fn start(receiver: Receiver<ProcessorMessage>) -> JoinHandle<()> {
             let mut stop_flag = false;
             loop {
                 match receiver.try_recv() {
-                    Ok(ProcessorMessage::Price(_price, _asset, _source)) => {
+                    Ok(PersisterMessage::Price(_price, _asset, _source)) => {
                         // TODO: implement persister
                     }
-                    Ok(ProcessorMessage::Stop) => {
+                    Ok(PersisterMessage::Stop) => {
                         info!("{} received stop", name);
                         stop_flag = true;
                     }
-                    Ok(ProcessorMessage::ConfigChange(_)) => {
+                    Ok(PersisterMessage::ConfigChange(_)) => {
                         // TODO: implement config change
                     }
                     Err(_) => {}

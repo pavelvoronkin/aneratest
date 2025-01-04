@@ -1,6 +1,6 @@
 use crate::upstream::price_feed::{FeedErr, PriceFeed};
 use async_trait::async_trait;
-use log::{error, info};
+use log::error;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -28,7 +28,7 @@ struct CoinbasePriceDataData {
 #[async_trait]
 impl PriceFeed for CoinbasePriceFeed {
     async fn fetch(&self) -> Result<f64, FeedErr> {
-        // TODO: circuit breaker
+        // TODO: introduce circuit breaker here, potentially Coinbase can ban if we will be persistent enough
         match reqwest::get(self.url.as_str()).await {
             Ok(data) => {
                 if data.status() != StatusCode::OK {
@@ -88,7 +88,7 @@ mod tests {
 
         // given
         let url = String::from("https://api.coinbase.com/v2/exchange-rates?currency=BTC");
-        let mut feed = CoinbasePriceFeed::new(url);
+        let feed = CoinbasePriceFeed::new(url);
 
         // when
         let price = feed.fetch().await.expect("price expected");
