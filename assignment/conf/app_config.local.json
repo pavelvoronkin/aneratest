@@ -6,7 +6,8 @@
         "asset": "BTC",
         "smoothing": "SMA",
         "weight": 100,
-        "urlPattern": "https://api.coinbase.com/v2/exchange-rates?currency={{asset}}"
+        "urlPattern": "https://api.coinbase.com/v2/exchange-rates?currency={{asset}}",
+        "enabled": true
       }
     ]
   },

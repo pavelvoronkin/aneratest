@@ -100,6 +100,7 @@ mod tests {
                     smoothing: Some(SmoothingAlgorithm::SMA),
                     url_pattern: "".to_string(),
                     weight: 60,
+                    enabled: true,
                     fail_count_warn: None
                 },
                 PriceFeedConfig {
@@ -108,6 +109,7 @@ mod tests {
                     smoothing: Some(SmoothingAlgorithm::SMA),
                     url_pattern: "".to_string(),
                     weight: 40,
+                    enabled: true,
                     fail_count_warn: None
                 },
             ],
@@ -121,6 +123,7 @@ mod tests {
                     smoothing: Some(SmoothingAlgorithm::EMA),
                     url_pattern: "".to_string(),
                     weight: 60,
+                    enabled: true,
                     fail_count_warn: None
                 },
                 PriceFeedConfig {
@@ -129,6 +132,7 @@ mod tests {
                     smoothing: Some(SmoothingAlgorithm::EMA),
                     url_pattern: "".to_string(),
                     weight: 40,
+                    enabled: true,
                     fail_count_warn: None
                 },
             ],
@@ -162,6 +166,7 @@ mod tests {
                     smoothing: None,
                     url_pattern: "".to_string(),
                     weight: 60,
+                    enabled: true,
                     fail_count_warn: None
                 },
                 PriceFeedConfig {
@@ -170,6 +175,7 @@ mod tests {
                     smoothing: None,
                     url_pattern: "".to_string(),
                     weight: 40,
+                    enabled: true,
                     fail_count_warn: None
                 },
             ],

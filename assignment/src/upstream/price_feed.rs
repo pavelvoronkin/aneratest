@@ -34,14 +34,6 @@ pub fn spawn_fetch_task(
                 break;
             }
 
-            if ctrl.is_paused() {
-                let now = clock::current_timestamp();
-                if now - last_paused_msg > 1000 {
-                    info!("price upstream {} paused", &source);
-                    last_paused_msg = now;
-                }
-            }
-
             match price_feed.fetch().await {
                 Ok(price) => {
                     fail_count = 0;

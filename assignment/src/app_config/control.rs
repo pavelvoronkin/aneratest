@@ -11,7 +11,6 @@ use crate::downstream::downstream_sender::DownstreamMessage;
 use crate::index_collector::processor::ProcessorMessage;
 
 const RUN: u8 = 0;
-const PAUSE: u8 = 1;
 const STOP: u8 = 2;
 
 pub fn start_signal_handler(control: Arc<Control>) {
@@ -40,7 +39,7 @@ impl Control {
                d_snd: Sender<DownstreamMessage>
     ) -> Control {
         Control {
-            flag: AtomicU8::new(0),
+            flag: AtomicU8::new(RUN),
             proc_snd,
             persister_snd,
             d_snd
@@ -51,24 +50,21 @@ impl Control {
         self.flag.load(Ordering::Relaxed) == STOP
     }
 
-    pub fn is_paused(&self) -> bool {
-        self.flag.load(Ordering::Relaxed) == PAUSE
-    }
-
     pub fn stop(&self) {
+        self.flag.store(STOP, Ordering::SeqCst);
+
         if let Err(e) = self.proc_snd.send(ProcessorMessage::Stop) {
             error!("processor stop send failed: {}", e);
         }
 
         if let Err(e) = self.persister_snd.send(ProcessorMessage::Stop) {
-            error!("processor stop send failed: {}", e);
+            error!("persister stop send failed: {}", e);
         }
 
         if let Err(e) = self.d_snd.send(DownstreamMessage::Stop) {
-            error!("processor stop send failed: {}", e);
+            error!("sender stop send failed: {}", e);
         }
 
-        self.flag.store(STOP, Ordering::SeqCst)
     }
 
     pub fn pause(&self) {

@@ -89,6 +89,7 @@ pub struct PriceFeedConfig {
     #[serde(alias = "urlPattern")]
     pub url_pattern: String,
     pub weight: u8,
+    pub enabled: bool,
     pub fail_count_warn: Option<u8>,
 }
 
@@ -127,6 +128,7 @@ mod tests {
                     smoothing: Some(SmoothingAlgorithm::SMA),
                     url_pattern: "".to_string(),
                     weight: 60,
+                    enabled: true,
                     fail_count_warn: None,
                 },
                 PriceFeedConfig {
@@ -135,6 +137,7 @@ mod tests {
                     smoothing: Some(SmoothingAlgorithm::SMA),
                     url_pattern: "".to_string(),
                     weight: 20,
+                    enabled: true,
                     fail_count_warn: None,
                 },
             ],
@@ -164,6 +167,7 @@ mod tests {
                     smoothing: Some(SmoothingAlgorithm::SMA),
                     url_pattern: "".to_string(),
                     weight: 60,
+                    enabled: true,
                     fail_count_warn: None,
                 },
                 PriceFeedConfig {
@@ -172,6 +176,7 @@ mod tests {
                     smoothing: Some(SmoothingAlgorithm::SMA),
                     url_pattern: "".to_string(),
                     weight: 20,
+                    enabled: true,
                     fail_count_warn: None,
                 },
             ],
@@ -198,6 +203,7 @@ mod tests {
             url_pattern: "https://api.coinbase.com/v2/exchange-rates?currency={{asset}}"
                 .to_string(),
             weight: 0,
+            enabled: true,
             fail_count_warn: None,
         };
 

@@ -25,7 +25,7 @@ pub fn start(
                     let url = format!("{}?price={}&asset={}", downstream_config.url.as_str(), index_price, asset.as_str());
                     match reqwest::get(&url).await {
                         Ok(_) => {
-                            info!("Index price sent to url: {} for asset {}", url, asset);
+                            debug!("Index price sent to url: {} for asset {}", url, asset);
                         }
                         Err(e) => {
                             error!("Error sending index price to url: {} for asset {}, {:?}", url, asset, e);
