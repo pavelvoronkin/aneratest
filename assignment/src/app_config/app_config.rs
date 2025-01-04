@@ -133,6 +133,14 @@ impl IndexCollectorAppConfig {
             let mut total = 0;
             let mut set = HashSet::new();
             for feed in feeds {
+                if feed.weight < 1 {
+                    return Err(format!("Weight should be at least 1 for source {}", feed.source));
+                }
+
+                if feed.weight > 100 {
+                    return Err(format!("Weight should be 100 max for source {}", feed.source));
+                }
+
                 total = total + feed.weight;
                 if !set.insert(feed.source.to_string().clone()) {
                     return Err(format!("Only one source per asset {} allowed", feed.asset));
@@ -155,7 +163,6 @@ impl IndexCollectorAppConfig {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct PriceFeedConfig {
     pub source: Source,
-    // TODO: support list of assets
     pub asset: Asset,
     pub smoothing: Option<SmoothingAlgorithm>,
     #[serde(alias = "urlPattern")]
@@ -228,6 +235,76 @@ mod tests {
         // then
         if let Err(validation_error) = config.validate() {
             assert_eq!(validation_error, "Total weight 80 is not equal to 100");
+        } else {
+            panic!("Error expected");
+        }
+    }
+
+    #[test]
+    fn test_min_weight() {
+        // given
+        let mut price_feeds = HashMap::new();
+        price_feeds.insert(
+            Asset::from_str("BTC").unwrap(),
+            vec![
+                PriceFeedConfig {
+                    source: Source::Coinbase,
+                    asset: "BTC".to_string(),
+                    smoothing: Some(SmoothingAlgorithm::SMA),
+                    url_pattern: "".to_string(),
+                    weight: 0,
+                    enabled: true,
+                    fail_count_warn: None,
+                },
+            ],
+        );
+
+        // when
+        let config = IndexCollectorAppConfig {
+            price_feeds,
+            downstream: DownstreamConfig {
+                url: "".to_string(),
+            },
+        };
+
+        // then
+        if let Err(validation_error) = config.validate() {
+            assert_eq!(validation_error, "Weight should be at least 1 for source Coinbase");
+        } else {
+            panic!("Error expected");
+        }
+    }
+
+    #[test]
+    fn test_max_weight() {
+        // given
+        let mut price_feeds = HashMap::new();
+        price_feeds.insert(
+            Asset::from_str("BTC").unwrap(),
+            vec![
+                PriceFeedConfig {
+                    source: Source::Coinbase,
+                    asset: "BTC".to_string(),
+                    smoothing: Some(SmoothingAlgorithm::SMA),
+                    url_pattern: "".to_string(),
+                    weight: 101,
+                    enabled: true,
+                    fail_count_warn: None,
+                },
+            ],
+        );
+
+        // when
+        let config = IndexCollectorAppConfig {
+            price_feeds,
+            downstream: DownstreamConfig {
+                url: "".to_string(),
+            },
+        };
+
+        // then
+        if let Err(validation_error) = config.validate() {
+            assert_eq!(validation_error, "Weight should be 100 max for source Coinbase");
         } else {
             panic!("Error expected");
         }
