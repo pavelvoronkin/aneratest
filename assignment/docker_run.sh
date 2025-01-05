@@ -1,1 +1,0 @@
-docker run index_collector:1.0

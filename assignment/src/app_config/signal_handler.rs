@@ -1,4 +1,4 @@
-use crate::app_config::app_config::ConfigPollerMessage;
+use crate::app_config::config_watcher::ConfigPollerMessage;
 use crate::downstream::downstream_sender::DownstreamMessage;
 use crate::index_collector::processor::ProcessorMessage;
 use crate::persistence::persistence_sender::PersisterMessage;

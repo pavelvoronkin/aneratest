@@ -8,6 +8,7 @@
     Pros: we can do pinning of a plain old thread
 4. Using the same message propagation mechanism reactor will emit index events to tokio enabled "downstream sender"
 5. Async layer will also emit events to "persistence_manager", i've made a stub for it
+6. On startup when we fail to fetch or parse config we retry forever, the idea is we won't expose /health endpoint in this case, so k8s or whoever will decide app is unhealthy and flags it to devops
 
 # App has the following logical structure:
 
@@ -52,31 +53,31 @@ fn new_price_feed(cfg: &PriceFeedConfig) -> Box<dyn PriceFeed> {
     }
 }
 ```
+# How to build this demo?
+Run ```build.sh```
 
-# How to run the app?
+# How to run this demo?
+
+## Prerequisite 
+Please install etcdctl to easily update etcd config via script
 
 ```
 brew install etcdctl 
 ```
-Please install etcdctl to easily update etc config via script
 
-```
-cargo run
-```
-
-app assumes default ```ENV=local``` meaning that ```app_config.local.json``` will be used
-
-You can specify ```ENV=qa``` and create file accordingly ```app_config.qa.json``` etc.
+## Run demo
+Call ```run_demo.sh```
+It will start etcd and app containers and uploads config into it
 
 # How to change price feed and downstream configs on the fly?
 
-simply edit ```app_config.local.json``` app will pick up changes with subsecond delay or another config depending ENV
+simply edit ```app_config.local.json``` and call ```etcd_refresh.sh```
 1. we can add price feed by adding this for example
 ```
-"BTC": [
+"ETH": [
     {
         "source": "Coinbase",
-        "asset": "BTC",
+        "asset": "ETH",
         "smoothing": "EMA",
         "weight": 100,
         "urlPattern": "https://api.coinbase.com/v2/exchange-rates?currency={{asset}}",
@@ -85,7 +86,7 @@ simply edit ```app_config.local.json``` app will pick up changes with subsecond 
 ]
 ```
 2. we can remove feed 
-3. we can enable or disable it by changing "enabled": true to false and vice versa 
-4. we can change smoothing and weight 
+3. we can disable or enable it by changing "enabled": true to false and vice versa 
+4. we can change smoothing and weight
 5. we do not support changing url on the flight, but however we support it via removing and adding feed 
 6. we support changing downstream url on the flight

@@ -2,8 +2,12 @@ extern crate core;
 
 use actix_web::{web, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
+use app_config::get_app_config;
 use assignment::app_config::app_config;
-use assignment::app_config::app_config::{start_config_poller_task, ConfigPollerMessage};
+use assignment::app_config::app_config::IndexCollectorAppConfig;
+use assignment::app_config::config_watcher::{
+    start_config_watcher_task, ConfigPollerMessage, DELAY_BETWEEN_ATTEMPTS,
+};
 use assignment::app_config::signal_handler::start_signal_handler_thread;
 use assignment::downstream::downstream_sender;
 use assignment::downstream::downstream_sender::DownstreamMessage;
@@ -18,9 +22,9 @@ use assignment::web::controller;
 use assignment::web::state::WebAppState;
 use crossbeam_channel::unbounded;
 use log::{error, info};
-use signal_hook::low_level::exit;
 use structopt::StructOpt;
 use tokio::sync::mpsc;
+use tokio::time::sleep;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
@@ -29,7 +33,7 @@ use tokio::sync::mpsc;
 )]
 struct Command {
     #[structopt(name = "app_config key in etcd", long = "--app_config", short = "c")]
-    pub config: Option<String>,
+    pub config_key: Option<String>,
     #[structopt(name = "etcd url", long = "--etcd_url", short = "u")]
     pub etcd_url: Option<String>,
 }
@@ -41,52 +45,63 @@ async fn main() {
     let args: Command = Command::from_args();
     info!("args: {:?}", args);
 
-    match app_config::get_app_config(args.config.clone(), args.etcd_url.clone()).await {
-        Ok(config) => {
-            info!("app_config: {:?}", config);
+    let config = get_config(&args).await;
 
-            let (proc_tx, proc_rx) = unbounded::<ProcessorMessage>();
-            let (persister_tx, persister_rx) = unbounded::<PersisterMessage>();
-            let (downstream_tx, downstream_rx) = mpsc::unbounded_channel::<DownstreamMessage>();
-            let (upstream_tx, upstream_rx) = mpsc::unbounded_channel::<PriceFeedManagerMessage>();
-            let (config_poller_tx, config_poller_rx) = unbounded::<ConfigPollerMessage>();
+    info!("app_config: {:?}", config);
 
-            start_signal_handler_thread(
-                proc_tx.clone(),
-                persister_tx.clone(),
-                downstream_tx.clone(),
-                upstream_tx.clone(),
-                config_poller_tx,
-            );
+    let (proc_tx, proc_rx) = unbounded::<ProcessorMessage>();
+    let (persister_tx, persister_rx) = unbounded::<PersisterMessage>();
+    let (downstream_tx, downstream_rx) = mpsc::unbounded_channel::<DownstreamMessage>();
+    let (upstream_tx, upstream_rx) = mpsc::unbounded_channel::<PriceFeedManagerMessage>();
+    let (config_watcher_tx, config_watcher_rx) = unbounded::<ConfigPollerMessage>();
 
-            start_config_poller_task(
-                config.clone(),
-                upstream_tx.clone(),
-                proc_tx.clone(),
-                persister_tx.clone(),
-                downstream_tx.clone(),
-                config_poller_rx,
-                args.config,
-            );
+    start_signal_handler_thread(
+        proc_tx.clone(),
+        persister_tx.clone(),
+        downstream_tx.clone(),
+        upstream_tx.clone(),
+        config_watcher_tx,
+    );
 
-            let mut price_feed_man = PriceFeedManager::new(proc_tx.clone(), persister_tx.clone());
-            price_feed_man.init(config.price_feeds.clone());
+    start_config_watcher_task(
+        config.clone(),
+        upstream_tx.clone(),
+        proc_tx.clone(),
+        persister_tx.clone(),
+        downstream_tx.clone(),
+        config_watcher_rx,
+        args.config_key,
+        args.etcd_url,
+    );
 
-            start_price_feed_man_control_task(price_feed_man, upstream_rx);
+    let mut price_feed_man = PriceFeedManager::new(proc_tx.clone(), persister_tx.clone());
+    price_feed_man.init(config.price_feeds.clone());
 
-            processor::start(proc_rx, downstream_tx, config.price_feeds);
+    start_price_feed_man_control_task(price_feed_man, upstream_rx);
 
-            downstream_sender::start(downstream_rx, config.downstream);
+    processor::start(proc_rx, downstream_tx, config.price_feeds);
 
-            persistence_sender::start(persister_rx);
+    downstream_sender::start(downstream_rx, config.downstream);
 
-            start_http_server().await;
-        }
-        Err(e) => {
-            error!("Error loading app_config: {:?}", e);
-            exit(1);
+    persistence_sender::start(persister_rx);
+
+    start_http_server().await;
+}
+
+async fn get_config(args: &Command) -> IndexCollectorAppConfig {
+    loop {
+        match get_app_config(args.config_key.clone(), args.etcd_url.clone()).await {
+            Ok(c) => {
+                return c
+            }
+            Err(e) => {
+                error!("Error loading config {}", e);
+                sleep(DELAY_BETWEEN_ATTEMPTS).await;
+            }
         }
     }
+
+
 }
 
 async fn start_http_server() {

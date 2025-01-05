@@ -1,89 +1,18 @@
-use crate::downstream::downstream_sender::DownstreamMessage;
 use crate::index_collector::index_collector::{Asset, FeedId, SmoothingAlgorithm, Source};
-use crate::index_collector::processor::ProcessorMessage;
-use crate::persistence::persistence_sender::PersisterMessage;
-use crate::upstream::price_feed::PriceFeedManagerMessage;
-use crossbeam_channel::{Receiver, Sender};
-use etcd_client::Client;
-use log::{debug, error, info};
+use etcd_client::{Client, KeyValue};
+use log::{error, info};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
-use std::{env, fs};
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use std::env;
 
 pub const LOCAL: &'static str = "local";
 pub const QA: &'static str = "qa";
 const TESTNET: &'static str = "testnet";
 const PROD: &'static str = "prod";
 
-pub enum ConfigPollerMessage {
-    Stop,
-}
-
-pub fn start_config_poller_task(
-    initial_config: IndexCollectorAppConfig,
-    upstream_tx: UnboundedSender<PriceFeedManagerMessage>,
-    prc_tx: Sender<ProcessorMessage>,
-    persister_tx: Sender<PersisterMessage>,
-    downstream_tx: UnboundedSender<DownstreamMessage>,
-    poller_rx: Receiver<ConfigPollerMessage>,
-    config: Option<String>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        info!("Config poller started");
-        let mut current = initial_config.clone();
-        loop {
-            match poller_rx.try_recv() {
-                Ok(_) => {
-                    break;
-                }
-                Err(_) => {}
-            }
-
-            /*match get_app_config(config.clone(), ) {
-                Ok(config) => {
-                    if !current.eq(&config) {
-                        if let Err(e) =
-                            upstream_tx.send(PriceFeedManagerMessage::ConfigChange(config.clone()))
-                        {
-                            error!("Error sending config change to processor: {}", e);
-                        }
-
-                        if let Err(e) = prc_tx.send(ProcessorMessage::ConfigChange(config.clone()))
-                        {
-                            error!("Error sending config change to processor: {}", e);
-                        }
-                        if let Err(e) =
-                            persister_tx.send(PersisterMessage::ConfigChange(config.clone()))
-                        {
-                            error!("Error sending config change to processor: {}", e);
-                        }
-                        if let Err(e) =
-                            downstream_tx.send(DownstreamMessage::ConfigChange(config.clone()))
-                        {
-                            error!("Error sending config change to processor: {}", e);
-                        }
-                        current = config;
-                    } else {
-                        debug!("No config changed")
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to reload app config: {}", e);
-                }
-            }*/
-
-            sleep(Duration::from_secs(1)).await;
-        }
-        info!("Config poller stopped");
-    })
-}
-
 pub fn get_config_key() -> String {
     let env = get_env();
+    info!("Using ENV: {}", env);
     match env.as_str() {
         QA => String::from("index_collector/qa"),
         TESTNET => String::from("index_collector/testnet"),
@@ -101,11 +30,41 @@ pub async fn get_app_config(
 
     info!("Using configuration file from key {}, url {}", key, url);
 
-    IndexCollectorAppConfig::from_etcd(url, key).await
+    from_etcd(url, key).await
 }
 
-pub fn get_env() -> String {
+fn get_env() -> String {
     env::var("ENV").unwrap_or(LOCAL.to_string())
+}
+
+pub fn from_key_value(kv: &KeyValue) -> Result<IndexCollectorAppConfig, String> {
+    match serde_json::from_slice::<IndexCollectorAppConfig>(kv.value()) {
+        Ok(config) => match config.validate() {
+            Ok(_) => Ok(config),
+            Err(validation_error) => {
+                error!("Failed to validate app_config: {}", validation_error);
+                Err(validation_error)
+            }
+        },
+        Err(e) => Err(format!(
+            "Failed to parse app config: {} {}",
+            kv.value_str().unwrap_or("unparseable string"),
+            e
+        )),
+    }
+}
+
+pub async fn from_etcd(url: String, key: String) -> Result<IndexCollectorAppConfig, String> {
+    match Client::connect([&url], None).await {
+        Ok(mut client) => match client.get(key.as_bytes(), None).await {
+            Ok(resp) => match resp.kvs().first() {
+                None => Err(format!("No keys found for {}", key)),
+                Some(kv) => from_key_value(kv),
+            },
+            Err(e) => Err(format!("Error reading {} from etcd: {}, {:?}", key, url, e)),
+        },
+        Err(e) => Err(format!("Error connecting to etcd: {}, {:?}", url, e)),
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -116,65 +75,6 @@ pub struct IndexCollectorAppConfig {
 }
 
 impl IndexCollectorAppConfig {
-    pub fn from_file(path: String) -> Result<IndexCollectorAppConfig, String> {
-        match fs::read_to_string(path.clone()) {
-            Ok(string) => match serde_json::from_str::<IndexCollectorAppConfig>(&string) {
-                Ok(config) => match config.validate() {
-                    Ok(_) => Ok(config),
-                    Err(validation_error) => {
-                        error!("Failed to validate app_config: {}", validation_error);
-                        Err(validation_error)
-                    }
-                },
-                Err(e) => Err(format!("Failed to parse app config file: {} {}", path, e)),
-            },
-            Err(_) => Err(format!("Failed to read app_config file: {}", path)),
-        }
-    }
-
-    pub async fn from_etcd(url: String, key: String) -> Result<IndexCollectorAppConfig, String> {
-        match Client::connect([&url], None).await {
-            Ok(mut client) => match client.get(key.as_bytes(), None).await {
-                Ok(resp) => match resp.kvs().first() {
-                    None => Err(format!("No keys found for {}", key)),
-                    Some(kv) => {
-                        match serde_json::from_slice::<IndexCollectorAppConfig>(kv.value()) {
-                            Ok(config) => match config.validate() {
-                                Ok(_) => Ok(config),
-                                Err(validation_error) => {
-                                    error!("Failed to validate app_config: {}", validation_error);
-                                    Err(validation_error)
-                                }
-                            },
-                            Err(e) => Err(format!(
-                                "Failed to parse app config: {} {}",
-                                kv.value_str().unwrap_or("unparseable string"),
-                                e
-                            )),
-                        }
-                    }
-                },
-                Err(e) => Err(format!("Error reading {} from etcd: {}, {:?}", key, url, e)),
-            },
-            Err(e) => Err(format!("Error connecting to etcd: {}, {:?}", url, e)),
-        }
-
-        /*client.get("foo", None).await;
-        match fs::read_to_string(key.clone()) {
-            Ok(string) => match serde_json::from_str::<IndexCollectorAppConfig>(&string) {
-                Ok(config) => match config.validate() {
-                    Ok(_) => Ok(config),
-                    Err(validation_error) => {
-                        error!("Failed to validate app_config: {}", validation_error);
-                        Err(validation_error)
-                    }
-                },
-                Err(e) => Err(format!("Failed to parse app config file: {} {}", path, e)),
-            },
-            Err(_) => Err(format!("Failed to read app_config file: {}", path)),
-        }*/
-    }
-
     fn validate(&self) -> Result<(), String> {
         for (_, feeds) in &self.price_feeds {
             let mut total = 0;

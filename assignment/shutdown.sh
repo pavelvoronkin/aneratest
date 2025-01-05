@@ -1,1 +1,0 @@
-curl -X POST http://localhost:8080/kline/v1/shutdown
