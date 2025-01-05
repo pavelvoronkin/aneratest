@@ -1,7 +1,7 @@
 # Architecture decision log and thoughts:
 1. I decided to stick for tokio async impl to build io intensive app and support as many feeds as possible with least possible CPU
-2. Async layer will emit events to a thread safe single thread reactor that will maintain state and do the calculation magic using plain old HashMap
-    2.1. Pros: no concurrency
+2. Async layer will emit events to a thread safe single thread reactor that will maintain state and do the calculation using plain old HashMap
+    Pros: no concurrency
     Pros: we can propagate config changes as single message to reactor that will ensure config changes will be "picked up" in time ordered fashion
     Cons: under very high event frequency we might consider splitting it into multireactor, but still it will be feasible to do partitioning by feeds 
 3. As the consequence of 2) i suggest to make reactor a good old thread that will burn core, so no reason stick to tokio here
@@ -9,6 +9,8 @@
 4. Using the same message propagation mechanism reactor will emit index events to tokio enabled "downstream sender"
 5. Async layer will also emit events to "persistence_manager", i've made a stub for it
 6. On startup when we fail to fetch or parse config we retry forever, the idea is we won't expose /health endpoint in this case, so k8s or whoever will decide app is unhealthy and flags it to devops
+7. Omitted adjusting sample count for SMA, EMA. It's easy to add later
+8. For tracing we can instrument crossbeam sender and receiver and tokio mpsc and export bucket metrics to prometheus endpoint  
 
 # App has the following logical structure:
 
