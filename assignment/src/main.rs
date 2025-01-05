@@ -40,7 +40,7 @@ struct Command {
 
 #[tokio::main]
 async fn main() {
-    log4rs::init_file("conf/log4rs.yml", Default::default()).expect("logging init failed");
+    log4rs::init_file("log4rs.yml", Default::default()).expect("logging init failed");
 
     let args: Command = Command::from_args();
     info!("args: {:?}", args);

@@ -66,8 +66,15 @@ brew install etcdctl
 ```
 
 ## Run demo
-Call ```run_demo.sh```
+Run ```run_demo.sh```
 It will start etcd and app containers and uploads config into it
+
+## Run demo locally
+If you prefer to play around with app and run it on your local machine instead 
+
+1. Call ```run_demo.sh```
+2. Shutdown index_collector container
+3. Run ```cargo run``` 
 
 # How to change price feed and downstream configs on the fly?
 

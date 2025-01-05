@@ -84,7 +84,7 @@ mod tests {
     // uncomment to quickly smoke coinbase price upstream
     async fn test_coinbase_price_feed_integration() {
         // setup
-        log4rs::init_file("conf/log4rs.yml", Default::default()).expect("logging init failed");
+        log4rs::init_file("log4rs.yml", Default::default()).expect("logging init failed");
 
         // given
         let url = String::from("https://api.coinbase.com/v2/exchange-rates?currency=BTC");
