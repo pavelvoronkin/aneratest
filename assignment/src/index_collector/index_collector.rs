@@ -25,7 +25,7 @@ pub type FeedId = String;
 pub struct IndexCollector {
     config: HashMap<FeedId, PriceFeedConfig>,
     smoothing: HashMap<FeedId, Box<dyn Smoothing>>,
-    state: HashMap<FeedId, f64>
+    state: HashMap<FeedId, f64>,
 }
 
 impl IndexCollector {

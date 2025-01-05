@@ -3,9 +3,7 @@ extern crate core;
 use actix_web::{web, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use assignment::app_config::app_config;
-use assignment::app_config::app_config::{
-    start_config_poller_task, ConfigPollerMessage,
-};
+use assignment::app_config::app_config::{start_config_poller_task, ConfigPollerMessage};
 use assignment::app_config::signal_handler::start_signal_handler_thread;
 use assignment::downstream::downstream_sender;
 use assignment::downstream::downstream_sender::DownstreamMessage;
@@ -30,8 +28,10 @@ use tokio::sync::mpsc;
     about = "A Rust index collector service"
 )]
 struct Command {
-    #[structopt(name = "app_config", long = "--app_config")]
+    #[structopt(name = "app_config key in etcd", long = "--app_config", short = "c")]
     pub config: Option<String>,
+    #[structopt(name = "etcd url", long = "--etcd_url", short = "u")]
+    pub etcd_url: Option<String>,
 }
 
 #[tokio::main]
@@ -41,7 +41,7 @@ async fn main() {
     let args: Command = Command::from_args();
     info!("args: {:?}", args);
 
-    match app_config::get_app_config(args.config.clone()) {
+    match app_config::get_app_config(args.config.clone(), args.etcd_url.clone()).await {
         Ok(config) => {
             info!("app_config: {:?}", config);
 

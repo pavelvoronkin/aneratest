@@ -1,9 +1,9 @@
+use crate::app_config::app_config::{DownstreamConfig, IndexCollectorAppConfig};
+use crate::index_collector::index_collector::Asset;
 use log::{debug, error, info};
 use reqwest::StatusCode;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
-use crate::app_config::app_config::{DownstreamConfig, IndexCollectorAppConfig};
-use crate::index_collector::index_collector::Asset;
 
 pub enum DownstreamMessage {
     Index(f64, Asset),

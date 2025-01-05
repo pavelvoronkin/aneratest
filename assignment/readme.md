@@ -56,6 +56,11 @@ fn new_price_feed(cfg: &PriceFeedConfig) -> Box<dyn PriceFeed> {
 # How to run the app?
 
 ```
+brew install etcdctl 
+```
+Please install etcdctl to easily update etc config via script
+
+```
 cargo run
 ```
 

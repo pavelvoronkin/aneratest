@@ -1,9 +1,10 @@
-
 use crate::downstream::downstream_sender::DownstreamMessage;
 use crate::index_collector::index_collector::{Asset, FeedId, SmoothingAlgorithm, Source};
 use crate::index_collector::processor::ProcessorMessage;
 use crate::persistence::persistence_sender::PersisterMessage;
+use crate::upstream::price_feed::PriceFeedManagerMessage;
 use crossbeam_channel::{Receiver, Sender};
+use etcd_client::Client;
 use log::{debug, error, info};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -12,7 +13,6 @@ use std::{env, fs};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
-use crate::upstream::price_feed::PriceFeedManagerMessage;
 
 pub const LOCAL: &'static str = "local";
 pub const QA: &'static str = "qa";
@@ -43,7 +43,7 @@ pub fn start_config_poller_task(
                 Err(_) => {}
             }
 
-            match get_app_config(config.clone()) {
+            /*match get_app_config(config.clone(), ) {
                 Ok(config) => {
                     if !current.eq(&config) {
                         if let Err(e) =
@@ -74,7 +74,7 @@ pub fn start_config_poller_task(
                 Err(e) => {
                     error!("Failed to reload app config: {}", e);
                 }
-            }
+            }*/
 
             sleep(Duration::from_secs(1)).await;
         }
@@ -82,22 +82,26 @@ pub fn start_config_poller_task(
     })
 }
 
-pub fn get_config_file_path() -> String {
+pub fn get_config_key() -> String {
     let env = get_env();
     match env.as_str() {
-        QA => String::from("conf/app_config.qa.json"),
-        TESTNET => String::from("conf/app_config.testnet.json"),
-        PROD => String::from("conf/app_config.prod.json"),
-        _ => String::from("conf/app_config.local.json"),
+        QA => String::from("index_collector/qa"),
+        TESTNET => String::from("index_collector/testnet"),
+        PROD => String::from("index_collector/prod"),
+        _ => String::from("index_collector/local"),
     }
 }
 
-pub fn get_app_config(config: Option<String>) -> Result<IndexCollectorAppConfig, String> {
-    let config_file = config.unwrap_or_else(|| get_config_file_path());
+pub async fn get_app_config(
+    config_key: Option<String>,
+    etcd_url: Option<String>,
+) -> Result<IndexCollectorAppConfig, String> {
+    let key = config_key.unwrap_or_else(|| get_config_key());
+    let url = etcd_url.unwrap_or_else(|| "127.0.0.1:2379".to_string());
 
-    debug!("Using configuration file from {0}", config_file);
+    info!("Using configuration file from key {}, url {}", key, url);
 
-    IndexCollectorAppConfig::from_file(config_file)
+    IndexCollectorAppConfig::from_etcd(url, key).await
 }
 
 pub fn get_env() -> String {
@@ -128,17 +132,66 @@ impl IndexCollectorAppConfig {
         }
     }
 
+    pub async fn from_etcd(url: String, key: String) -> Result<IndexCollectorAppConfig, String> {
+        match Client::connect([&url], None).await {
+            Ok(mut client) => match client.get(key.as_bytes(), None).await {
+                Ok(resp) => match resp.kvs().first() {
+                    None => Err(format!("No keys found for {}", key)),
+                    Some(kv) => {
+                        match serde_json::from_slice::<IndexCollectorAppConfig>(kv.value()) {
+                            Ok(config) => match config.validate() {
+                                Ok(_) => Ok(config),
+                                Err(validation_error) => {
+                                    error!("Failed to validate app_config: {}", validation_error);
+                                    Err(validation_error)
+                                }
+                            },
+                            Err(e) => Err(format!(
+                                "Failed to parse app config: {} {}",
+                                kv.value_str().unwrap_or("unparseable string"),
+                                e
+                            )),
+                        }
+                    }
+                },
+                Err(e) => Err(format!("Error reading {} from etcd: {}, {:?}", key, url, e)),
+            },
+            Err(e) => Err(format!("Error connecting to etcd: {}, {:?}", url, e)),
+        }
+
+        /*client.get("foo", None).await;
+        match fs::read_to_string(key.clone()) {
+            Ok(string) => match serde_json::from_str::<IndexCollectorAppConfig>(&string) {
+                Ok(config) => match config.validate() {
+                    Ok(_) => Ok(config),
+                    Err(validation_error) => {
+                        error!("Failed to validate app_config: {}", validation_error);
+                        Err(validation_error)
+                    }
+                },
+                Err(e) => Err(format!("Failed to parse app config file: {} {}", path, e)),
+            },
+            Err(_) => Err(format!("Failed to read app_config file: {}", path)),
+        }*/
+    }
+
     fn validate(&self) -> Result<(), String> {
         for (_, feeds) in &self.price_feeds {
             let mut total = 0;
             let mut set = HashSet::new();
             for feed in feeds {
                 if feed.weight < 1 {
-                    return Err(format!("Weight should be at least 1 for source {}", feed.source));
+                    return Err(format!(
+                        "Weight should be at least 1 for source {}",
+                        feed.source
+                    ));
                 }
 
                 if feed.weight > 100 {
-                    return Err(format!("Weight should be 100 max for source {}", feed.source));
+                    return Err(format!(
+                        "Weight should be 100 max for source {}",
+                        feed.source
+                    ));
                 }
 
                 total = total + feed.weight;
@@ -246,17 +299,15 @@ mod tests {
         let mut price_feeds = HashMap::new();
         price_feeds.insert(
             Asset::from_str("BTC").unwrap(),
-            vec![
-                PriceFeedConfig {
-                    source: Source::Coinbase,
-                    asset: "BTC".to_string(),
-                    smoothing: Some(SmoothingAlgorithm::SMA),
-                    url_pattern: "".to_string(),
-                    weight: 0,
-                    enabled: true,
-                    fail_count_warn: None,
-                },
-            ],
+            vec![PriceFeedConfig {
+                source: Source::Coinbase,
+                asset: "BTC".to_string(),
+                smoothing: Some(SmoothingAlgorithm::SMA),
+                url_pattern: "".to_string(),
+                weight: 0,
+                enabled: true,
+                fail_count_warn: None,
+            }],
         );
 
         // when
@@ -269,7 +320,10 @@ mod tests {
 
         // then
         if let Err(validation_error) = config.validate() {
-            assert_eq!(validation_error, "Weight should be at least 1 for source Coinbase");
+            assert_eq!(
+                validation_error,
+                "Weight should be at least 1 for source Coinbase"
+            );
         } else {
             panic!("Error expected");
         }
@@ -281,17 +335,15 @@ mod tests {
         let mut price_feeds = HashMap::new();
         price_feeds.insert(
             Asset::from_str("BTC").unwrap(),
-            vec![
-                PriceFeedConfig {
-                    source: Source::Coinbase,
-                    asset: "BTC".to_string(),
-                    smoothing: Some(SmoothingAlgorithm::SMA),
-                    url_pattern: "".to_string(),
-                    weight: 101,
-                    enabled: true,
-                    fail_count_warn: None,
-                },
-            ],
+            vec![PriceFeedConfig {
+                source: Source::Coinbase,
+                asset: "BTC".to_string(),
+                smoothing: Some(SmoothingAlgorithm::SMA),
+                url_pattern: "".to_string(),
+                weight: 101,
+                enabled: true,
+                fail_count_warn: None,
+            }],
         );
 
         // when
@@ -304,7 +356,10 @@ mod tests {
 
         // then
         if let Err(validation_error) = config.validate() {
-            assert_eq!(validation_error, "Weight should be 100 max for source Coinbase");
+            assert_eq!(
+                validation_error,
+                "Weight should be 100 max for source Coinbase"
+            );
         } else {
             panic!("Error expected");
         }
