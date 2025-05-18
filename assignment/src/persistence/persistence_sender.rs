@@ -1,13 +1,14 @@
-use crate::app_config::app_config::IndexCollectorAppConfig;
-use crate::index_collector::index_collector::{Asset, Source};
+use crate::app_config::app_config::AppConfig;
+use crate::arb_bot::arb_bot::{Asset, Source};
+use crate::upstream::price_feed::PriceEvent;
 use crossbeam_channel::Receiver;
 use log::info;
 use std::process::exit;
 use std::thread::JoinHandle;
 
 pub enum PersisterMessage {
-    Price(f64, Asset, Source),
-    ConfigChange(IndexCollectorAppConfig),
+    Price(PriceEvent, Asset, Source),
+    ConfigChange(AppConfig),
     Stop,
 }
 

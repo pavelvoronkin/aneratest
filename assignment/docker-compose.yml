@@ -8,9 +8,10 @@ services:
       - "2380:2380"
     environment:
       ALLOW_NONE_AUTHENTICATION: yes
-  index_collector:
-    image: index_collector:1.0.0
-    ports:
-      - "8080:8080"
-    environment:
-      ETCD_URL: "etcd:2379"
+
+#  arb_bot: if you want to start arb_bot as image
+#image: arb_bot:1.0.0
+    #ports:
+  #- "8080:8080"
+  #environment:
+  #ETCD_URL: "etcd:2379"

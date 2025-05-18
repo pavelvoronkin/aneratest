@@ -1,12 +1,13 @@
-use crate::app_config::app_config::{IndexCollectorAppConfig, PriceFeedConfig};
-use crate::index_collector::index_collector::{Asset, FeedId, Source};
-use crate::index_collector::processor::ProcessorMessage;
+use crate::app_config::app_config::{AppConfig, PriceFeedConfig};
+use crate::arb_bot::arb_bot::{Asset, FeedId, Source};
+use crate::arb_bot::processor::ProcessorMessage;
 use crate::infra::clock::current_timestamp;
 use crate::persistence::persistence_sender::PersisterMessage;
-use crate::upstream::coinbase_price_feed::CoinbasePriceFeed;
+use crate::upstream::binance_price_feed::BinancePriceFeed;
+use crate::upstream::uniswap_feed::UniswapFeed;
 use async_trait::async_trait;
 use crossbeam_channel::Sender;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -20,7 +21,7 @@ const STATE_PAUSED: u8 = 1;
 const STATE_STOPPED: u8 = 2;
 
 pub enum PriceFeedManagerMessage {
-    ConfigChange(IndexCollectorAppConfig),
+    ConfigChange(AppConfig),
     Stop,
 }
 
@@ -129,7 +130,7 @@ fn start_fetch_task(
         let fail_count_warn = price_feed_cfg.fail_count_warn.unwrap_or(5);
         let source = price_feed_cfg.source.clone();
         let asset = price_feed_cfg.asset.clone();
-        let price_feed = new_price_feed(&price_feed_cfg);
+        let mut price_feed = new_price_feed(&price_feed_cfg).await;
         let mut last_pause_message_timestamp = 0;
         info!("Price upstream {} started", &key);
 
@@ -155,26 +156,37 @@ fn start_fetch_task(
                 continue;
             }
 
+            /* why i made trait like this?
+
+             loop {
+                match price_feed.fetch().await {
+
+                }
+             }
+
+             to make trait more generic, what it will be not websocket, but rather polling http
+            */
             match price_feed.fetch().await {
-                Ok(price) => {
+                Ok(price_event_opt) => {
                     fail_count = 0;
-                    trace!("Price upstream {} fetched {}", key, price);
+                    if let Some(price_event) = price_event_opt {
+                        debug!("Price upstream {} fetched {:?}", key, price_event);
+                        // maybe replace with fan?
+                        if let Err(e) = proc_tx.try_send(ProcessorMessage::Price(
+                            price_event.clone(),
+                            asset.clone(),
+                            source.clone(),
+                        )) {
+                            error!("Error try_send {} to processor: {}", key, e);
+                        }
 
-                    // maybe replace with fan?
-                    if let Err(e) = proc_tx.try_send(ProcessorMessage::Price(
-                        price,
-                        asset.clone(),
-                        source.clone(),
-                    )) {
-                        error!("Error try_send {} to processor: {}", key, e);
-                    }
-
-                    if let Err(e) = persister_tx.try_send(PersisterMessage::Price(
-                        price,
-                        asset.clone(),
-                        source.clone(),
-                    )) {
-                        error!("Error try_send {} to persister: {}", key, e);
+                        if let Err(e) = persister_tx.try_send(PersisterMessage::Price(
+                            price_event,
+                            asset.clone(),
+                            source.clone(),
+                        )) {
+                            error!("Error try_send {} to persister: {}", key, e);
+                        }
                     }
                 }
                 Err(e) => {
@@ -194,18 +206,22 @@ fn start_fetch_task(
     state
 }
 
-fn new_price_feed(cfg: &PriceFeedConfig) -> Box<dyn PriceFeed> {
+async fn new_price_feed(cfg: &PriceFeedConfig) -> Box<dyn PriceFeed> {
     match cfg.source {
-        Source::Coinbase => Box::new(CoinbasePriceFeed::new(cfg.url())),
-        Source::Kraken => {
-            panic!("Kraken price upstream not supported yet");
-        }
+        Source::Binance => Box::new(BinancePriceFeed::new(cfg.url()).await),
+        Source::Uniswap => Box::new(UniswapFeed::new()),
     }
 }
 
 #[async_trait]
 pub trait PriceFeed: Send + Sync + 'static {
-    async fn fetch(&self) -> Result<f64, FeedErr>;
+    async fn fetch(&mut self) -> Result<Option<PriceEvent>, FeedErr>;
+}
+
+#[derive(Clone, Debug)]
+pub struct PriceEvent {
+    pub price: f64,
+    pub timestamp: i64,
 }
 
 #[derive(Debug)]

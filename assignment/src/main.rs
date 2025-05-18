@@ -4,15 +4,13 @@ use actix_web::{web, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use app_config::get_app_config;
 use assignment::app_config::app_config;
-use assignment::app_config::app_config::IndexCollectorAppConfig;
+use assignment::app_config::app_config::AppConfig;
 use assignment::app_config::config_watcher::{
     start_config_watcher_task, ConfigPollerMessage, DELAY_BETWEEN_ATTEMPTS,
 };
 use assignment::app_config::signal_handler::start_signal_handler_thread;
-use assignment::downstream::downstream_sender;
-use assignment::downstream::downstream_sender::DownstreamMessage;
-use assignment::index_collector::processor;
-use assignment::index_collector::processor::ProcessorMessage;
+use assignment::arb_bot::processor;
+use assignment::arb_bot::processor::ProcessorMessage;
 use assignment::persistence::persistence_sender;
 use assignment::persistence::persistence_sender::PersisterMessage;
 use assignment::upstream::price_feed::{
@@ -27,10 +25,7 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 #[derive(StructOpt, Debug)]
-#[structopt(
-    name = "rust-index-collector",
-    about = "A Rust index collector service"
-)]
+#[structopt(name = "rust-arb-bot", about = "A Rust iArb Boy service")]
 struct Command {
     #[structopt(name = "app_config key in etcd", long = "--app_config", short = "c")]
     pub config_key: Option<String>,
@@ -51,14 +46,12 @@ async fn main() {
 
     let (proc_tx, proc_rx) = unbounded::<ProcessorMessage>();
     let (persister_tx, persister_rx) = unbounded::<PersisterMessage>();
-    let (downstream_tx, downstream_rx) = mpsc::unbounded_channel::<DownstreamMessage>();
     let (upstream_tx, upstream_rx) = mpsc::unbounded_channel::<PriceFeedManagerMessage>();
     let (config_watcher_tx, config_watcher_rx) = unbounded::<ConfigPollerMessage>();
 
     start_signal_handler_thread(
         proc_tx.clone(),
         persister_tx.clone(),
-        downstream_tx.clone(),
         upstream_tx.clone(),
         config_watcher_tx,
     );
@@ -68,7 +61,6 @@ async fn main() {
         upstream_tx.clone(),
         proc_tx.clone(),
         persister_tx.clone(),
-        downstream_tx.clone(),
         config_watcher_rx,
         args.config_key,
         args.etcd_url,
@@ -79,33 +71,27 @@ async fn main() {
 
     start_price_feed_man_control_task(price_feed_man, upstream_rx);
 
-    processor::start(proc_rx, downstream_tx, config.price_feeds);
-
-    downstream_sender::start(downstream_rx, config.downstream);
+    processor::start(proc_rx, config);
 
     persistence_sender::start(persister_rx);
 
     start_http_server().await;
 }
 
-async fn get_config(args: &Command) -> IndexCollectorAppConfig {
+async fn get_config(args: &Command) -> AppConfig {
     loop {
         match get_app_config(args.config_key.clone(), args.etcd_url.clone()).await {
-            Ok(c) => {
-                return c
-            }
+            Ok(c) => return c,
             Err(e) => {
                 error!("Error loading config {}", e);
                 sleep(DELAY_BETWEEN_ATTEMPTS).await;
             }
         }
     }
-
-
 }
 
 async fn start_http_server() {
-    let prometheus = PrometheusMetricsBuilder::new("index_collector")
+    let prometheus = PrometheusMetricsBuilder::new("arb_bot")
         .endpoint("/metrics")
         .build()
         .unwrap();

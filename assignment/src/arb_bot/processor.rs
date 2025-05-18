@@ -1,23 +1,17 @@
-use crate::app_config::app_config::{IndexCollectorAppConfig, PriceFeedConfig};
-use crate::downstream::downstream_sender::DownstreamMessage;
-use crate::index_collector::index_collector::{Asset, IndexCollector, Source};
+use crate::app_config::app_config::AppConfig;
+use crate::arb_bot::arb_bot::{ArbBot, Asset, Source};
+use crate::upstream::price_feed::PriceEvent;
 use crossbeam_channel::Receiver;
-use log::{error, info};
-use std::collections::HashMap;
+use log::info;
 use std::thread::JoinHandle;
-use tokio::sync::mpsc::UnboundedSender;
 
 pub enum ProcessorMessage {
-    Price(f64, Asset, Source),
-    ConfigChange(IndexCollectorAppConfig),
+    Price(PriceEvent, Asset, Source),
+    ConfigChange(AppConfig),
     Stop,
 }
 
-pub fn start(
-    receiver: Receiver<ProcessorMessage>,
-    sender: UnboundedSender<DownstreamMessage>,
-    map: HashMap<Asset, Vec<PriceFeedConfig>>,
-) -> JoinHandle<()> {
+pub fn start(receiver: Receiver<ProcessorMessage>, map: AppConfig) -> JoinHandle<()> {
     let name = String::from("processor");
     let fail_msg = format!("Couldn't start {}", name);
     std::thread::Builder::new()
@@ -25,17 +19,13 @@ pub fn start(
         .spawn(move || {
             info!("started {}", name);
             let mut stop_flag = false;
-            let mut collector = IndexCollector::new(map.clone());
+            let mut bot = ArbBot::new(map.clone());
             loop {
                 match receiver.try_recv() {
                     Ok(ProcessorMessage::Price(price, asset, source)) => {
-                        collector.collect_price(price, &asset, &source);
-                        if let Some(index_price) = collector.get_index_price(&asset) {
-                            if let Err(e) =
-                                sender.send(DownstreamMessage::Index(index_price, asset.clone()))
-                            {
-                                error!("Error sending index to downstream {}", e);
-                            }
+                        bot.collect_price(price, &asset, &source);
+                        if let Some(_) = bot.take_opportunities(&asset) {
+                            // TODO: send opportunity to downstream
                         }
                     }
                     Ok(ProcessorMessage::Stop) => {
@@ -44,7 +34,7 @@ pub fn start(
                     }
                     Ok(ProcessorMessage::ConfigChange(cfg)) => {
                         info!("processor received config change");
-                        collector.init(cfg.price_feeds);
+                        bot.init(cfg);
                     }
                     Err(_) => {}
                 }

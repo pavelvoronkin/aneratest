@@ -7,10 +7,8 @@
 3. As the consequence of 2) i suggest to make reactor a good old thread that will burn core, so no reason stick to tokio here
     Pros: we can do pinning of a plain old thread
 4. Using the same message propagation mechanism reactor will emit index events to tokio enabled "downstream sender"
-5. Async layer will also emit events to "persistence_manager", i've made a stub for it
-6. On startup when we fail to fetch or parse config we retry forever, the idea is we won't expose /health endpoint in this case, so k8s or whoever will decide app is unhealthy and flags it to devops
-7. Omitted adjusting sample count for SMA, EMA. It's easy to add later
-8. For tracing we can instrument crossbeam sender and receiver and tokio mpsc and export bucket metrics to prometheus endpoint  
+5. On startup when we fail to fetch or parse config we retry forever, the idea is we won't expose /health endpoint in this case, so k8s or whoever will decide app is unhealthy and flags it to devops
+6. For tracing we can instrument crossbeam sender and receiver and tokio mpsc and export bucket metrics to prometheus endpoint  
 
 # App has the following logical structure:
 
@@ -75,7 +73,7 @@ It will start etcd and app containers and uploads config into it
 If you prefer to play around with app and run it on your local machine instead 
 
 1. Call ```run_demo.sh```
-2. Shutdown index_collector container
+2. Shutdown arb_bot container
 3. Run ```cargo run``` 
 
 # How to change price feed and downstream configs on the fly?
@@ -87,8 +85,6 @@ simply edit ```app_config.local.json``` and call ```etcd_refresh.sh```
     {
         "source": "Coinbase",
         "asset": "ETH",
-        "smoothing": "EMA",
-        "weight": 100,
         "urlPattern": "https://api.coinbase.com/v2/exchange-rates?currency={{asset}}",
         "enabled": true
     }

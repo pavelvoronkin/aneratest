@@ -1,2 +1,2 @@
 cargo clean
-docker build -t index_collector:1.0.0 .
+docker build -t arb_bot:1.0.0 .

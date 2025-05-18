@@ -1,6 +1,5 @@
 use crate::app_config::config_watcher::ConfigPollerMessage;
-use crate::downstream::downstream_sender::DownstreamMessage;
-use crate::index_collector::processor::ProcessorMessage;
+use crate::arb_bot::processor::ProcessorMessage;
 use crate::persistence::persistence_sender::PersisterMessage;
 use crate::upstream::price_feed::PriceFeedManagerMessage;
 use crossbeam_channel::Sender;
@@ -14,7 +13,6 @@ use tokio::sync::mpsc::UnboundedSender;
 pub fn start_signal_handler_thread(
     proc_tx: Sender<ProcessorMessage>,
     persister_tx: Sender<PersisterMessage>,
-    downstream_tx: UnboundedSender<DownstreamMessage>,
     price_feed_manager_tx: UnboundedSender<PriceFeedManagerMessage>,
     config_poller_tx: Sender<ConfigPollerMessage>,
 ) {
@@ -39,10 +37,6 @@ pub fn start_signal_handler_thread(
 
                 if let Err(e) = persister_tx.send(PersisterMessage::Stop) {
                     error!("persister stop send failed: {}", e);
-                }
-
-                if let Err(e) = downstream_tx.send(DownstreamMessage::Stop) {
-                    error!("downstream stop send failed: {}", e);
                 }
 
                 thread::sleep(Duration::from_secs(10));

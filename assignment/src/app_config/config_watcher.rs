@@ -1,6 +1,5 @@
-use crate::app_config::app_config::IndexCollectorAppConfig;
-use crate::downstream::downstream_sender::DownstreamMessage;
-use crate::index_collector::processor::ProcessorMessage;
+use crate::app_config::app_config::AppConfig;
+use crate::arb_bot::processor::ProcessorMessage;
 use crate::persistence::persistence_sender::PersisterMessage;
 use crate::upstream::price_feed::PriceFeedManagerMessage;
 use crossbeam_channel::{Receiver, Sender};
@@ -17,11 +16,10 @@ pub enum ConfigPollerMessage {
 pub const DELAY_BETWEEN_ATTEMPTS: Duration = Duration::from_secs(1);
 
 pub fn start_config_watcher_task(
-    initial_config: IndexCollectorAppConfig,
+    initial_config: AppConfig,
     upstream_tx: UnboundedSender<PriceFeedManagerMessage>,
     prc_tx: Sender<ProcessorMessage>,
     persister_tx: Sender<PersisterMessage>,
-    downstream_tx: UnboundedSender<DownstreamMessage>,
     config_watcher_rx: Receiver<ConfigPollerMessage>,
     config: Option<String>,
     etcd_url: Option<String>,
@@ -88,13 +86,6 @@ pub fn start_config_watcher_task(
                                                             }
                                                             if let Err(e) = persister_tx.send(
                                                                 PersisterMessage::ConfigChange(
-                                                                    config.clone(),
-                                                                ),
-                                                            ) {
-                                                                error!("Error sending config change to processor: {}", e);
-                                                            }
-                                                            if let Err(e) = downstream_tx.send(
-                                                                DownstreamMessage::ConfigChange(
                                                                     config.clone(),
                                                                 ),
                                                             ) {
