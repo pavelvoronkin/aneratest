@@ -6,20 +6,18 @@
     Cons: under very high event frequency we might consider splitting it into multireactor, but still it will be feasible to do partitioning by feeds 
 3. As the consequence of 2) i suggest to make reactor a good old thread that will burn core, so no reason stick to tokio here
     Pros: we can do pinning of a plain old thread
-4. Using the same message propagation mechanism reactor will emit index events to tokio enabled "downstream sender"
+4. Using the same message propagation mechanism reactor will emit events to tokio enabled "downstream sender"
 5. On startup when we fail to fetch or parse config we retry forever, the idea is we won't expose /health endpoint in this case, so k8s or whoever will decide app is unhealthy and flags it to devops
 6. For tracing we can instrument crossbeam sender and receiver and tokio mpsc and export bucket metrics to prometheus endpoint  
 
 # App has the following logical structure:
 
-asset1 
-    - source1, w11 -> tokio task key = assert1_source1
-    - source2, w12 -> tokio task key = assert1_source1
+source1 
+    - asset1, asset2, ... -> tokio task key = source1
     ...
 
-asset2
-    - source1, w21 -> tokio task assert2_source1
-    - source2, w22 -> tokio task assert2_source1
+source2
+    - asset1, asset2, ... -> tokio task key = source2
     ...
 
 Each task lives it's own life and can be controlled via flag enabled/disabled in config, also url and asset substitution within url supported
@@ -39,15 +37,15 @@ You need to extend enum Source
 ```
 #[derive(Debug, Clone, Copy, Deserialize, Display, PartialEq)]
 pub enum Source {
-Coinbase,
-Kraken,
+Binance,
+Uniswap,
 }
 ```
 Implement trait PriceFeed 
 
 Ensure it's instantiated in method below:
 ```
-fn new_price_feed(cfg: &PriceFeedConfig) -> Box<dyn PriceFeed> {
+fn new_price_feed(cfg: &OrderBookFeedConfig) -> Box<dyn OrderBookFeed> {
     match cfg.source {
         ...
     }
@@ -73,22 +71,21 @@ It will start etcd and app containers and uploads config into it
 If you prefer to play around with app and run it on your local machine instead 
 
 1. Call ```run_demo.sh```
-2. Shutdown arb_bot container
+2. Shutdown order_book_collector container
 3. Run ```cargo run``` 
 
-# How to change price feed and downstream configs on the fly?
+# How to change feed and downstream configs on the fly?
 
 simply edit ```app_config.local.json``` and call ```etcd_refresh.sh```
-1. we can add price feed by adding this for example
+1. we can add feed by adding this for example
 ```
-"ETH": [
+"feeds": [
     {
-        "source": "Coinbase",
-        "asset": "ETH",
-        "urlPattern": "https://api.coinbase.com/v2/exchange-rates?currency={{asset}}",
-        "enabled": true
+      "source": "Binance",
+      "urlPattern": "wss://stream.binance.com/ws/btcusdt@depth/ethusdt@depth",
+      "enabled": true
     }
-]
+  ]
 ```
 2. we can remove feed 
 3. we can disable or enable it by changing "enabled": true to false and vice versa 

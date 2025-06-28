@@ -1,13 +1,12 @@
-use crate::app_config::app_config::{AppConfig, PriceFeedConfig};
-use crate::arb_bot::arb_bot::{Asset, FeedId, Source};
-use crate::arb_bot::processor::ProcessorMessage;
-use crate::infra::clock::current_timestamp;
+use crate::app_config::app_config::{AppConfig, FeedConfig};
+use crate::order_book::order_book_collector::{Asset, Source};
+use crate::order_book::processor::ProcessorMessage;
 use crate::persistence::persistence_sender::PersisterMessage;
-use crate::upstream::binance_price_feed::BinancePriceFeed;
-use crate::upstream::uniswap_feed::UniswapFeed;
+use crate::upstream::binance_order_book_feed::BinanceOrderBookFeed;
+use crate::upstream::uniswap_order_book_feed::UniswapFeed;
 use async_trait::async_trait;
 use crossbeam_channel::Sender;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -25,13 +24,13 @@ pub enum PriceFeedManagerMessage {
     Stop,
 }
 
-pub struct PriceFeedManager {
+pub struct OrderBookFeedManager {
     proc_tx: Sender<ProcessorMessage>,
     persister_tx: Sender<PersisterMessage>,
-    tasks: HashMap<FeedId, Arc<AtomicU8>>,
+    tasks: HashMap<Source, Arc<AtomicU8>>
 }
 
-impl PriceFeedManager {
+impl OrderBookFeedManager {
     pub fn new(proc_tx: Sender<ProcessorMessage>, persister_tx: Sender<PersisterMessage>) -> Self {
         Self {
             proc_tx,
@@ -40,34 +39,31 @@ impl PriceFeedManager {
         }
     }
 
-    pub fn init(&mut self, feeds: HashMap<Asset, Vec<PriceFeedConfig>>) {
+    pub fn init(&mut self, feeds: Vec<FeedConfig>) {
         let mut map = HashMap::new();
-
-        for (_, price_feed_configs) in feeds {
-            for price_feed_cfg in price_feed_configs {
-                let key = price_feed_cfg.key();
-                map.insert(key.clone(), price_feed_cfg.clone());
-                if let Some(task_state) = self.tasks.get(&key) {
-                    info!(
-                        "Update task {} state to enabled = {}",
-                        key, price_feed_cfg.enabled
-                    );
-                    task_state.store(
-                        if price_feed_cfg.enabled {
-                            STATE_RUNNING
-                        } else {
-                            STATE_PAUSED
-                        },
-                        SeqCst,
-                    );
-                } else {
-                    let task_state = start_fetch_task(
-                        price_feed_cfg,
-                        self.proc_tx.clone(),
-                        self.persister_tx.clone(),
-                    );
-                    self.tasks.insert(key, task_state);
-                }
+        for price_feed_cfg in feeds {
+            let key = price_feed_cfg.key();
+            map.insert(key.clone(), price_feed_cfg.clone());
+            if let Some(task_state) = self.tasks.get(&key) {
+                info!(
+                    "Update task {} state to enabled = {}",
+                    key, price_feed_cfg.enabled
+                );
+                task_state.store(
+                    if price_feed_cfg.enabled {
+                        STATE_RUNNING
+                    } else {
+                        STATE_PAUSED
+                    },
+                    SeqCst,
+                );
+            } else {
+                let task_state = start_fetch_task(
+                    price_feed_cfg,
+                    self.proc_tx.clone(),
+                    self.persister_tx.clone(),
+                );
+                self.tasks.insert(key, task_state);
             }
         }
 
@@ -91,19 +87,15 @@ impl PriceFeedManager {
     }
 }
 
-const PAUSE_MESSAGE_INTERVAL_MS: i64 = 5000;
-
 pub fn start_price_feed_man_control_task(
-    mut price_feed_man: PriceFeedManager,
+    mut price_feed_man: OrderBookFeedManager,
     mut rcv: UnboundedReceiver<PriceFeedManagerMessage>,
 ) {
     tokio::spawn(async move {
         loop {
             match rcv.recv().await {
                 Some(msg) => match msg {
-                    PriceFeedManagerMessage::ConfigChange(conf) => {
-                        price_feed_man.init(conf.price_feeds)
-                    }
+                    PriceFeedManagerMessage::ConfigChange(conf) => price_feed_man.init(conf.feeds),
                     PriceFeedManagerMessage::Stop => price_feed_man.stop_all(),
                 },
                 None => {}
@@ -113,11 +105,11 @@ pub fn start_price_feed_man_control_task(
 }
 
 fn start_fetch_task(
-    price_feed_cfg: PriceFeedConfig,
+    feed_cfg: FeedConfig,
     proc_tx: Sender<ProcessorMessage>,
     persister_tx: Sender<PersisterMessage>,
 ) -> Arc<AtomicU8> {
-    let state = Arc::new(AtomicU8::new(if price_feed_cfg.enabled {
+    let state = Arc::new(AtomicU8::new(if feed_cfg.enabled {
         STATE_RUNNING
     } else {
         STATE_PAUSED
@@ -125,13 +117,9 @@ fn start_fetch_task(
     let state_clone = state.clone();
 
     tokio::spawn(async move {
-        let key = price_feed_cfg.key();
-        let mut fail_count = 0;
-        let fail_count_warn = price_feed_cfg.fail_count_warn.unwrap_or(5);
-        let source = price_feed_cfg.source.clone();
-        let asset = price_feed_cfg.asset.clone();
-        let mut price_feed = new_price_feed(&price_feed_cfg).await;
-        let mut last_pause_message_timestamp = 0;
+        let key = feed_cfg.key();
+        let source = feed_cfg.source.clone();
+        let mut order_book_feed = new_price_feed(&feed_cfg).await;
         info!("Price upstream {} started", &key);
 
         loop {
@@ -142,10 +130,6 @@ fn start_fetch_task(
             }
 
             if state == STATE_PAUSED {
-                if current_timestamp() - last_pause_message_timestamp > PAUSE_MESSAGE_INTERVAL_MS {
-                    info!("Price upstream {} paused", &key);
-                    last_pause_message_timestamp = current_timestamp();
-                }
                 /*
                 TODO: we are burning here too much, so i introduce some sleep,
                     because in our arch we can change config not more frequently than every second, see start_config_poller_task.
@@ -166,23 +150,17 @@ fn start_fetch_task(
 
              to make trait more generic, what it will be not websocket, but rather polling http
             */
-            match price_feed.fetch().await {
-                Ok(price_event_opt) => {
-                    fail_count = 0;
-                    if let Some(price_event) = price_event_opt {
-                        debug!("Price upstream {} fetched {:?}", key, price_event);
+            match order_book_feed.fetch().await {
+                Ok(order_book_opt) => {
+                    if let Some(order_book) = order_book_opt {
+                        debug!("Price upstream {} fetched {:?}", key, order_book);
                         // maybe replace with fan?
-                        if let Err(e) = proc_tx.try_send(ProcessorMessage::Price(
-                            price_event.clone(),
-                            asset.clone(),
-                            source.clone(),
-                        )) {
+                        if let Err(e) = proc_tx.try_send(ProcessorMessage::OrderBook(order_book.clone())) {
                             error!("Error try_send {} to processor: {}", key, e);
                         }
 
-                        if let Err(e) = persister_tx.try_send(PersisterMessage::Price(
-                            price_event,
-                            asset.clone(),
+                        if let Err(e) = persister_tx.try_send(PersisterMessage::OrderBook(
+                            order_book,
                             source.clone(),
                         )) {
                             error!("Error try_send {} to persister: {}", key, e);
@@ -194,11 +172,6 @@ fn start_fetch_task(
                         "Error fetching price upstream {}, code: {:?}, message: {}",
                         &source, e.code, e.message
                     );
-                    fail_count = fail_count + 1;
-                    if fail_count > fail_count_warn {
-                        warn!("Error fetching price upstream {}", key);
-                        fail_count = 0;
-                    }
                 }
             };
         }
@@ -206,22 +179,31 @@ fn start_fetch_task(
     state
 }
 
-async fn new_price_feed(cfg: &PriceFeedConfig) -> Box<dyn PriceFeed> {
+async fn new_price_feed(cfg: &FeedConfig) -> Box<dyn OrderBookFeed> {
     match cfg.source {
-        Source::Binance => Box::new(BinancePriceFeed::new(cfg.url()).await),
+        Source::Binance => Box::new(BinanceOrderBookFeed::new(cfg.url()).await),
         Source::Uniswap => Box::new(UniswapFeed::new()),
     }
 }
 
 #[async_trait]
-pub trait PriceFeed: Send + Sync + 'static {
-    async fn fetch(&mut self) -> Result<Option<PriceEvent>, FeedErr>;
+pub trait OrderBookFeed: Send + Sync + 'static {
+    async fn fetch(&mut self) -> Result<Option<OrderBook>, FeedErr>;
 }
 
-#[derive(Clone, Debug)]
-pub struct PriceEvent {
+#[derive(Debug, Clone)]
+pub struct OrderBookLevel {
     pub price: f64,
+    pub qty: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderBook {
+    pub source: Source,
+    pub asset: Asset,
     pub timestamp: i64,
+    pub bids: Vec<OrderBookLevel>, // sorted descending by price
+    pub asks: Vec<OrderBookLevel>, // sorted ascending by price
 }
 
 #[derive(Debug)]

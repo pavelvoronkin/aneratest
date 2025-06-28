@@ -1,7 +1,7 @@
 use crate::app_config::config_watcher::ConfigPollerMessage;
-use crate::arb_bot::processor::ProcessorMessage;
+use crate::order_book::processor::ProcessorMessage;
 use crate::persistence::persistence_sender::PersisterMessage;
-use crate::upstream::price_feed::PriceFeedManagerMessage;
+use crate::upstream::order_book_feed::PriceFeedManagerMessage;
 use crossbeam_channel::Sender;
 use log::{error, info};
 use signal_hook::consts::{SIGINT, SIGTERM};

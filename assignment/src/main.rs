@@ -1,5 +1,6 @@
 extern crate core;
 
+use std::sync::Arc;
 use actix_web::{web, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use app_config::get_app_config;
@@ -9,12 +10,12 @@ use assignment::app_config::config_watcher::{
     start_config_watcher_task, ConfigPollerMessage, DELAY_BETWEEN_ATTEMPTS,
 };
 use assignment::app_config::signal_handler::start_signal_handler_thread;
-use assignment::arb_bot::processor;
-use assignment::arb_bot::processor::ProcessorMessage;
+use assignment::order_book::processor;
+use assignment::order_book::processor::ProcessorMessage;
 use assignment::persistence::persistence_sender;
 use assignment::persistence::persistence_sender::PersisterMessage;
-use assignment::upstream::price_feed::{
-    start_price_feed_man_control_task, PriceFeedManager, PriceFeedManagerMessage,
+use assignment::upstream::order_book_feed::{
+    start_price_feed_man_control_task, OrderBookFeedManager, PriceFeedManagerMessage,
 };
 use assignment::web::controller;
 use assignment::web::state::WebAppState;
@@ -23,6 +24,7 @@ use log::{error, info};
 use structopt::StructOpt;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
+use assignment::infra::clock::SystemClock;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "rust-arb-bot", about = "A Rust iArb Boy service")]
@@ -44,6 +46,7 @@ async fn main() {
 
     info!("app_config: {:?}", config);
 
+    let clock = Arc::new(SystemClock::new());
     let (proc_tx, proc_rx) = unbounded::<ProcessorMessage>();
     let (persister_tx, persister_rx) = unbounded::<PersisterMessage>();
     let (upstream_tx, upstream_rx) = mpsc::unbounded_channel::<PriceFeedManagerMessage>();
@@ -66,12 +69,12 @@ async fn main() {
         args.etcd_url,
     );
 
-    let mut price_feed_man = PriceFeedManager::new(proc_tx.clone(), persister_tx.clone());
-    price_feed_man.init(config.price_feeds.clone());
+    let mut price_feed_man = OrderBookFeedManager::new(proc_tx.clone(), persister_tx.clone());
+    price_feed_man.init(config.feeds.clone());
 
     start_price_feed_man_control_task(price_feed_man, upstream_rx);
 
-    processor::start(proc_rx, config);
+    processor::start(proc_rx, config, clock);
 
     persistence_sender::start(persister_rx);
 
@@ -91,7 +94,7 @@ async fn get_config(args: &Command) -> AppConfig {
 }
 
 async fn start_http_server() {
-    let prometheus = PrometheusMetricsBuilder::new("arb_bot")
+    let prometheus = PrometheusMetricsBuilder::new("order_book_collector")
         .endpoint("/metrics")
         .build()
         .unwrap();

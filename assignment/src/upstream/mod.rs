@@ -1,3 +1,3 @@
-mod binance_price_feed;
-pub mod price_feed;
-mod uniswap_feed;
+mod binance_order_book_feed;
+pub mod order_book_feed;
+mod uniswap_order_book_feed;

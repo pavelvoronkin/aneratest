@@ -1,7 +1,7 @@
 use crate::app_config::app_config::AppConfig;
-use crate::arb_bot::processor::ProcessorMessage;
+use crate::order_book::processor::ProcessorMessage;
 use crate::persistence::persistence_sender::PersisterMessage;
-use crate::upstream::price_feed::PriceFeedManagerMessage;
+use crate::upstream::order_book_feed::PriceFeedManagerMessage;
 use crossbeam_channel::{Receiver, Sender};
 use etcd_client::Client;
 use log::{error, info};

@@ -1,25 +1,13 @@
 {
-  "arbBot": {
+  "orderBookCollector": {
       "timeDiff": 1000,
-      "priceThreshold": 1,
-      "qty": 10,
-      "lockoutPeriod": 2000,
       "enabled": true
   },
-  "priceFeeds": {
-    "ETH": [
-      {
-        "source": "Binance",
-        "asset": "ETH",
-        "urlPattern": "wss://stream.binance.com:9443/ws/ethusdt@aggTrade",
-        "enabled": true
-      },
-      {
-        "source": "Uniswap",
-        "asset": "ETH",
-        "urlPattern": "wss://mock",
-        "enabled": true
-      }
-    ]
-  }
+  "feeds": [
+    {
+      "source": "Binance",
+      "urlPattern": "wss://stream.binance.com/ws/btcusdt@depth/ethusdt@depth",
+      "enabled": true
+    }
+  ]
 }

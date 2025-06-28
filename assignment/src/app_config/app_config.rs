@@ -1,8 +1,7 @@
-use crate::arb_bot::arb_bot::{Asset, FeedId, Source};
+use crate::order_book::order_book_collector::Source;
 use etcd_client::{Client, KeyValue};
 use log::{error, info};
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::env;
 
 pub const LOCAL: &'static str = "local";
@@ -14,10 +13,10 @@ pub fn get_config_key() -> String {
     let env = get_env();
     info!("Using ENV: {}", env);
     match env.as_str() {
-        QA => String::from("arb_bot/qa"),
-        TESTNET => String::from("arb_bot/testnet"),
-        PROD => String::from("arb_bot/prod"),
-        _ => String::from("arb_bot/local"),
+        QA => String::from("order_book/qa"),
+        TESTNET => String::from("order_book/testnet"),
+        PROD => String::from("order_book/prod"),
+        _ => String::from("order_book/local"),
     }
 }
 
@@ -69,10 +68,10 @@ pub async fn from_etcd(url: String, key: String) -> Result<AppConfig, String> {
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct AppConfig {
-    #[serde(alias = "priceFeeds")]
-    pub price_feeds: HashMap<Asset, Vec<PriceFeedConfig>>,
-    #[serde(alias = "arbBot")]
-    pub arb_bot_config: ArbBotConfig,
+    #[serde(alias = "feeds")]
+    pub feeds: Vec<FeedConfig>,
+    #[serde(alias = "orderBookCollector")]
+    pub ob_collector_config: OrderBookCollectorConfig,
 }
 
 impl AppConfig {
@@ -84,21 +83,15 @@ impl AppConfig {
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct ArbBotConfig {
-    pub time_diff: u64,
-    pub price_threshold: u64,
-    pub qty: i64,
-    pub enabled: bool,
-    pub lockout_period: u64,
+pub struct OrderBookCollectorConfig {
+    pub time_diff: i64,
+    pub enabled: bool
 }
 
-impl Default for ArbBotConfig {
+impl Default for OrderBookCollectorConfig {
     fn default() -> Self {
-        ArbBotConfig {
+        OrderBookCollectorConfig {
             time_diff: 1000,
-            price_threshold: 1000,
-            qty: 10,
-            lockout_period: 2000,
             enabled: true,
         }
     }
@@ -106,46 +99,43 @@ impl Default for ArbBotConfig {
 
 // Price upstream struct to hold data and configurations
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct PriceFeedConfig {
+pub struct FeedConfig {
     pub source: Source,
-    pub asset: Asset,
     #[serde(alias = "urlPattern")]
     pub url_pattern: String,
     pub enabled: bool,
-    pub fail_count_warn: Option<u8>,
 }
 
-impl PriceFeedConfig {
+impl FeedConfig {
     pub fn url(&self) -> String {
-        self.url_pattern.clone().replace("{{asset}}", &self.asset)
+        // todo replacements here to customize url
+        self.url_pattern.clone()
     }
 
-    pub fn key(&self) -> FeedId {
-        format!("{}_{}", self.source, self.asset)
+    pub fn key(&self) -> Source {
+        self.source.clone()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::app_config::app_config::PriceFeedConfig;
-    use crate::arb_bot::arb_bot::Source;
+    use crate::app_config::app_config::FeedConfig;
+    use crate::order_book::order_book_collector::Source;
     use Source::Binance;
 
     #[test]
     fn test_url_resolution() {
         // given
-        let cfg = PriceFeedConfig {
+        let cfg = FeedConfig {
             source: Binance,
-            asset: "BTC".to_string(),
-            url_pattern: "wss://stream.binance.com:9443/ws/ethusdt@aggTrad".to_string(),
+            url_pattern: "wss://stream.binance.com:9443/ws/ethusdt@aggTrade".to_string(),
             enabled: true,
-            fail_count_warn: None,
         };
 
         // when then
         assert_eq!(
             cfg.url().as_str(),
-            "wss://stream.binance.com:9443/ws/ethusdt@aggTrad"
+            "wss://stream.binance.com:9443/ws/ethusdt@aggTrade"
         );
     }
 }

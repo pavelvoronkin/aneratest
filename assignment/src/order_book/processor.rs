@@ -1,17 +1,19 @@
+use std::sync::Arc;
 use crate::app_config::app_config::AppConfig;
-use crate::arb_bot::arb_bot::{ArbBot, Asset, Source};
-use crate::upstream::price_feed::PriceEvent;
+use crate::order_book::order_book_collector::OrderBookCollector;
+use crate::upstream::order_book_feed::OrderBook;
 use crossbeam_channel::Receiver;
 use log::info;
 use std::thread::JoinHandle;
+use crate::infra::clock::Clock;
 
 pub enum ProcessorMessage {
-    Price(PriceEvent, Asset, Source),
+    OrderBook(OrderBook),
     ConfigChange(AppConfig),
     Stop,
 }
 
-pub fn start(receiver: Receiver<ProcessorMessage>, map: AppConfig) -> JoinHandle<()> {
+pub fn start(receiver: Receiver<ProcessorMessage>, map: AppConfig, clock: Arc<dyn Clock>) -> JoinHandle<()> {
     let name = String::from("processor");
     let fail_msg = format!("Couldn't start {}", name);
     std::thread::Builder::new()
@@ -19,14 +21,12 @@ pub fn start(receiver: Receiver<ProcessorMessage>, map: AppConfig) -> JoinHandle
         .spawn(move || {
             info!("started {}", name);
             let mut stop_flag = false;
-            let mut bot = ArbBot::new(map.clone());
+            let mut collector = OrderBookCollector::new(map.clone(), clock);
             loop {
                 match receiver.try_recv() {
-                    Ok(ProcessorMessage::Price(price, asset, source)) => {
-                        bot.collect_price(price, &asset, &source);
-                        if let Some(_) = bot.take_opportunities(&asset) {
-                            // TODO: send opportunity to downstream
-                        }
+                    Ok(ProcessorMessage::OrderBook(order_book)) => {
+                        collector.collect_order_book(order_book);
+                        // TODO: send to downstream?
                     }
                     Ok(ProcessorMessage::Stop) => {
                         info!("{} received stop", name);
@@ -34,7 +34,7 @@ pub fn start(receiver: Receiver<ProcessorMessage>, map: AppConfig) -> JoinHandle
                     }
                     Ok(ProcessorMessage::ConfigChange(cfg)) => {
                         info!("processor received config change");
-                        bot.init(cfg);
+                        collector.init(cfg);
                     }
                     Err(_) => {}
                 }

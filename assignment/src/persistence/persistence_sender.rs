@@ -1,13 +1,13 @@
 use crate::app_config::app_config::AppConfig;
-use crate::arb_bot::arb_bot::{Asset, Source};
-use crate::upstream::price_feed::PriceEvent;
+use crate::order_book::order_book_collector::Source;
+use crate::upstream::order_book_feed::OrderBook;
 use crossbeam_channel::Receiver;
 use log::info;
 use std::process::exit;
 use std::thread::JoinHandle;
 
 pub enum PersisterMessage {
-    Price(PriceEvent, Asset, Source),
+    OrderBook(OrderBook, Source),
     ConfigChange(AppConfig),
     Stop,
 }
@@ -22,7 +22,7 @@ pub fn start(receiver: Receiver<PersisterMessage>) -> JoinHandle<()> {
             let mut stop_flag = false;
             loop {
                 match receiver.try_recv() {
-                    Ok(PersisterMessage::Price(_price, _asset, _source)) => {
+                    Ok(PersisterMessage::OrderBook(_price, _source)) => {
                         // TODO: implement persister
                     }
                     Ok(PersisterMessage::Stop) => {
